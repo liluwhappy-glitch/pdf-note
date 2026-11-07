@@ -307,13 +307,15 @@ let livePage = null;
 /* ---------- pdf.js: run in main thread (worker script loaded as a plain script) ---------- */
 // PDFの読み込み・解析を画面とは別のスレッドで行い、指の操作が止まらないようにする（使えない環境では従来どおり）
 const PDF_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+let pdfWorker=null;   // 共有の解析スレッド（文書を閉じても破棄されないよう、明示的に渡す）
+function pdfOpts(){ return pdfWorker ? { worker:pdfWorker } : {}; }
 function setupPdfWorker(){
   return new Promise(res=>{
     try {
       pdfjsLib.GlobalWorkerOptions.workerSrc=PDF_WORKER;
       const w=new Worker(URL.createObjectURL(new Blob([`importScripts('${PDF_WORKER}');`],{ type:'text/javascript' })));
       const t=setTimeout(()=>{ try{ w.terminate(); }catch(_){} res(false); }, 3000);
-      const ok=()=>{ clearTimeout(t); w.removeEventListener('message', ok); pdfjsLib.GlobalWorkerOptions.workerPort=w; res(true); };
+      const ok=()=>{ clearTimeout(t); w.removeEventListener('message', ok); try{ pdfWorker=new pdfjsLib.PDFWorker({ port:w }); }catch(_){ pdfWorker=null; } res(!!pdfWorker); };
       w.addEventListener('message', ok);
       w.addEventListener('error', ()=>{ clearTimeout(t); try{ w.terminate(); }catch(_){} res(false); });
     } catch(e){ res(false); }
@@ -1066,7 +1068,7 @@ async function buildDoc(doc, bytes, metaPages){
   doc.bytes=bytes||null; if (bytes) doc.hasBytes=true;
   const vps=[];
   if (bytes){
-    doc.pdf=await pdfjsLib.getDocument({ data:bytes.slice(), ...PDFJS_OPTS }).promise;
+    doc.pdf=await pdfjsLib.getDocument({ data:bytes.slice(), ...PDFJS_OPTS, ...pdfOpts() }).promise;
     for (let i=1;i<=doc.pdf.numPages;i++){ const pg=await doc.pdf.getPage(i); vps[i]=pg.getViewport({scale:1}); }
   }
   if (doc.pages){ for (const p of doc.pages) if (p.kind==='pdf') p.vp=vps[p.src]||p.vp; }
