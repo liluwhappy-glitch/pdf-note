@@ -183,7 +183,8 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 .scthumbs img{height:140px;border-radius:4px;box-shadow:0 2px 10px rgba(0,0,0,.5);background:#fff}
 .scmsg{color:#99a0ad;font-size:13px;text-align:center;padding:0 16px}
 /* shapes & images */
-#popemode .emode{display:flex;gap:6px}
+#popemode .emode,#popcap .emode{display:flex;gap:6px}
+#popcap .btn{border:1px solid var(--line);height:38px;padding:0 12px}
 #popemode .btn{border:1px solid var(--line);height:38px;padding:0 14px}
 #popshape{display:flex;flex-direction:column;gap:10px;width:292px;max-width:calc(100vw - 72px)}
 .shks{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
@@ -278,6 +279,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 
   <div id="pop" hidden>
     <div id="popshape" hidden></div>
+    <div id="popcap" hidden><div class="lbl">マーカーの端</div><div class="emode" id="capbtns"></div></div>
     <div id="popemode" hidden><div class="lbl">消しかた</div><div class="emode" id="emode"></div></div>
     <div id="popcol"><div class="lbl">色</div><div class="swatches" id="swatches"></div></div>
     <div id="popsize"><div class="lbl" id="sizelbl">太さ</div><div class="sizes" id="sizes"></div></div>
@@ -394,7 +396,7 @@ const HL_ALPHA = 0.38;
 const ZMIN = 0.5, ZMAX = 4;
 const SEL_COLOR = '#2457d6';
 
-const st = { eraseMode:'stroke', editSel:false, tool:'pen', color:{pen:0, hl:3}, size:{pen:1, hl:1, eraser:1}, width:{ pen:1, hl:12 },
+const st = { hlCap:'round', eraseMode:'stroke', editSel:false, tool:'pen', color:{pen:0, hl:3}, size:{pen:1, hl:1, eraser:1}, width:{ pen:1, hl:12 },
              pencilOnly:false, pencilSeen:false, zoom:1, fit:1 };
 try { const w=JSON.parse(localStorage.getItem('akanib-width')||'null');
   if (w) for (const t of ['pen','hl']) if (typeof w[t]==='number') st.width[t]=Math.min(WRANGE[t][1], Math.max(WRANGE[t][0], w[t])); } catch(e){}
@@ -499,7 +501,7 @@ function drawStroke(ctx, s, dx=0, dy=0){
   if (s.tool==='img') return drawImg(ctx,s,dx,dy);
   const p=s.pts, n=p.length/3;
   if (s.tool==='hl'){
-    ctx.save(); ctx.globalAlpha=HL_ALPHA; ctx.strokeStyle=s.color; ctx.lineWidth=s.w; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.save(); ctx.globalAlpha=HL_ALPHA; ctx.strokeStyle=s.color; ctx.lineWidth=s.w; ctx.lineCap=(s.cap==='butt' && n>1)?'butt':'round'; ctx.lineJoin='round';
     ctx.beginPath(); ctx.moveTo(p[0]+dx,p[1]+dy);
     if (n===1) ctx.lineTo(p[0]+dx+0.01,p[1]+dy);
     else {
@@ -644,6 +646,7 @@ function paintCaps(ctx, ls, s, from, out){
   }
 }
 function commitSeg(c, j){      // 入力点 j が来たので、点 j-1 を制御点とする曲線を確定部分に足す
+  if (c.stroke.cap==='butt') return;   // 角のマーカーは、書いている間じゅう全体を1本の線として描く（drawCur）
   const s=c.stroke, p=s.pts, ls=liveScale();
   const cx=p[(j-1)*3], cy=p[(j-1)*3+1], cr=srad(s,p[(j-1)*3+2]);
   const bx=(cx+p[j*3])/2, by=(cy+p[j*3+1])/2, br=(cr+srad(s,p[j*3+2]))/2;
@@ -676,6 +679,7 @@ const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud']);
 const SH_W=[0.5, 14];
 st.shape={ kind:'rect', color:'#d6322b', fill:null, fa:1, w:1.8, square:false };
 try { const o=JSON.parse(localStorage.getItem('akanib-shape')||'null'); if (o) Object.assign(st.shape, o); } catch(e){}
+try { const c=localStorage.getItem('akanib-hlcap'); if (c==='round'||c==='butt') st.hlCap=c; } catch(e){}
 try { const m=localStorage.getItem('akanib-erase'); if (m==='part'||m==='stroke') st.eraseMode=m; } catch(e){}
 const saveShapeSt=()=>{ try{ localStorage.setItem('akanib-shape', JSON.stringify(st.shape)); }catch(e){} };
 const KAP=0.5522847498;
@@ -907,11 +911,12 @@ pagesEl.addEventListener('pointerdown', e => {
     }
     if (rejoin){          // ブラウザが入力を取り消して途切れた直後に書き始めた線は、前の線の続きとしてつなぐ
       p.strokes=p.strokes.slice(0,-1); redrawInk(p);
-      const o=li.stroke; cur.stroke={ id:uid(), tool:o.tool, color:o.color, w:o.w, pts:o.pts.slice() };
+      const o=li.stroke; cur.stroke={ id:uid(), tool:o.tool, color:o.color, w:o.w, pts:o.pts.slice() }; if (o.cap) cur.stroke.cap=o.cap;
       cur.stroke.pts.push(x,y,pr); resetInk(cur);
     } else {
       cur.stroke={ id:uid(), tool:st.tool, color:(st.tool==='pen'?PEN_COLORS:HL_COLORS)[st.color[st.tool]][0],
                    w:Math.round(st.width[st.tool]*100)/100, pts:[x,y,pr] };
+      if (st.tool==='hl' && st.hlCap==='butt') cur.stroke.cap='butt';
       cur.cm=[x,y,srad(cur.stroke,pr)];
       live.style.opacity = st.tool==='hl' ? HL_ALPHA : 1;
     }
@@ -1002,7 +1007,7 @@ function splitStroke(s, ax, ay, bx, by, r){
   const flush=()=>{ if (run.length>=2){ const pts=[];
       for (const i of run){ const pr = s.tool==='hl' ? 0.5 : clamp((d[i*3+2]/(s.w/2)-0.3)/1.2, 0, 1);
         pts.push(Math.round(d[i*3]*100)/100, Math.round(d[i*3+1]*100)/100, Math.round(pr*1000)/1000); }
-      out.push({ id:uid(), tool:s.tool, color:s.color, w:s.w, pts, done:true }); }
+      const ns={ id:uid(), tool:s.tool, color:s.color, w:s.w, pts, done:true }; if (s.cap) ns.cap=s.cap; out.push(ns); }
     run=[]; };
   for (let i=0;i<n;i++){ if (keep[i]) run.push(i); else flush(); }
   flush(); return out;
@@ -1040,6 +1045,12 @@ function drawCur(){
   const ls=liveScale(), px=1/cssK();
   if (cur.mode==='ink'){
     const s=cur.stroke, p=s.pts, n=p.length/3;
+    if (s.tool==='hl' && s.cap==='butt' && n>1){
+      clearLive(); live.style.opacity=HL_ALPHA; lctx.setTransform(ls,0,0,ls,0,0);
+      lctx.strokeStyle=s.color; lctx.lineWidth=s.w; lctx.lineCap='butt'; lctx.lineJoin='round'; lctx.beginPath(); lctx.moveTo(p[0],p[1]);
+      for (let i=1;i<n-1;i++) lctx.quadraticCurveTo(p[i*3],p[i*3+1],(p[i*3]+p[i*3+3])/2,(p[i*3+1]+p[i*3+4])/2);
+      lctx.lineTo(p[(n-1)*3],p[(n-1)*3+1]); lctx.stroke(); return;
+    }
     if (s.tool==='hl'){
       if (s.straight){ clearLive(); live.style.opacity=HL_ALPHA; paintCaps(lctx, ls, s, [p[0],p[1],s.w/2], [p[3],p[4],s.w/2]); }
       return;
@@ -1295,6 +1306,12 @@ function syncUI(){
   const colored = st.tool==='pen' || st.tool==='hl';
   $('#popcol').hidden=!colored || shapeUI; $('#popsize').hidden=shapeUI; $('#popshape').hidden=!shapeUI;
   if (shapeUI) buildShapePop();
+  $('#popcap').hidden = st.tool!=='hl';
+  if (st.tool==='hl'){ const cp=$('#capbtns'); cp.replaceChildren();
+    for (const [m,n,sh] of [['round','丸','M5 12h14'],['butt','角','M5 12h14']]){
+      const b=document.createElement('button'); b.className='btn toggle capb'; b.setAttribute('aria-pressed', String(st.hlCap===m)); b.title=n+'い端';
+      b.innerHTML=`<svg viewBox="0 0 24 24" width="30" height="20"><path d="M6 12h12" stroke="currentColor" stroke-width="9" stroke-linecap="${m==='round'?'round':'butt'}" opacity=".55"/></svg><span>${n}</span>`;
+      b.onclick=()=>{ st.hlCap=m; try{ localStorage.setItem('akanib-hlcap',m); }catch(e){} syncUI(); }; cp.append(b); } }
   $('#popemode').hidden = st.tool!=='eraser';
   if (st.tool==='eraser'){ const em=$('#emode'); em.replaceChildren();
     for (const [m,n,t] of [['stroke','線ごと','触れた線を1本まるごと消します'],['part','部分消し','なぞった部分だけを消します（線が途中で切れます）']]){
@@ -1324,7 +1341,7 @@ function syncUI(){
     const show=()=>{ const w=st.width[st.tool], mm=w*PT_MM;
       val.textContent=(mm<1?mm.toFixed(2):mm.toFixed(1))+' mm';
       const h=Math.max(1, Math.min(34, w*cssK()));
-      bar.style.height=h+'px'; bar.style.background=col; bar.style.opacity= st.tool==='hl' ? HL_ALPHA : 1; };
+      bar.style.borderRadius = (st.tool==='hl' && st.hlCap==='butt') ? '0' : ''; bar.style.height=h+'px'; bar.style.background=col; bar.style.opacity= st.tool==='hl' ? HL_ALPHA : 1; };
     rng.addEventListener('input', ()=>{ st.width[st.tool]=Math.round(fromV(+rng.value)*100)/100; show(); });
     rng.addEventListener('change', ()=>{ try{ localStorage.setItem('akanib-width', JSON.stringify(st.width)); }catch(e){} });
     row.append(thin, rng, thick, val); wrap.append(prev, row); sz.append(wrap); show();
@@ -1590,7 +1607,7 @@ async function kvGet(k){ try{ const db=await idb(); return await new Promise((re
 async function kvDel(k){ try{ const db=await idb(); await new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
 let saveT;
 function serStroke(s){ const o={ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts };
-  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; return o; }
+  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; return o; }
 function metaOf(doc){
   const act = doc===D;
   return { name:doc.name, hasBytes:doc.hasBytes, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
@@ -1683,7 +1700,7 @@ async function exportPdf(){
             for (let i=1;i<nq-1;i++){ const c=T(i), e2=toPdf(p,(q[i*3]+q[i*3+3])/2,(q[i*3+1]+q[i*3+4])/2); d+='Q'+c.map(f2).join(' ')+' '+e2.map(f2).join(' ')+' '; }
             d+='L'+T(nq-1).map(f2).join(' ');
           }
-          page.drawSvgPath(d,{ x:0, y:0, borderColor:hexRgb(s.color), borderWidth:s.w, borderOpacity:HL_ALPHA, borderLineCap:LineCapStyle.Round });
+          page.drawSvgPath(d,{ x:0, y:0, borderColor:hexRgb(s.color), borderWidth:s.w, borderOpacity:HL_ALPHA, borderLineCap:(s.cap==='butt'?LineCapStyle.Butt:LineCapStyle.Round) });
         } else {
           for (const r of strokeRuns(s, 0.4)){
             let d=''; for (let i=0;i<r.pts.length;i+=2){ const [a2,b2]=toPdf(p,r.pts[i],r.pts[i+1]); d+=(i?'L':'M')+f2(a2)+' '+f2(b2)+' '; }
@@ -3139,7 +3156,7 @@ function buildGuide(){
   $('#gbody').innerHTML=
    `<h3>書き込みツール（画面のツールバー）</h3><div class="ggrid">`+
    card(I('[data-tool=pen]'),'ペン','Apple Pencilで書きます。選んでいるときにもう一度タップすると、色と太さ（スライダー）を変えられます。線を引いて止めると直線になります。')+
-   card(I('[data-tool=hl]'),'蛍光ペン','文字の上をなぞって色をつけます。色と太さはペンと同じ要領で変えられます。')+
+   card(I('[data-tool=hl]'),'蛍光ペン','文字の上をなぞって色をつけます。もう一度タップすると、色・太さ・線の端の形（丸／角）を選べます。')+
    card(I('[data-tool=eraser]'),'消しゴム','なぞって消します。もう一度タップすると、大きさと「線ごと／部分消し」を切り替えられます。部分消しは、なぞった部分だけが消えて線が途中で切れます。図形の塗りの内側や、貼った画像は消えません。')+
    card(I('[data-tool=select]'),'選択（V）','図形・画像・線をタップして選び、そのままドラッグで移動します。四隅の丸で大きさを変えられます。何もないところをドラッグすると範囲選択です。')+
    card(I('[data-tool=lasso]'),'なげなわ（L）','囲んだ範囲の書き込みをまとめて選び、移動・複製・削除できます。')+
