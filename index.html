@@ -367,10 +367,10 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 <div class="dlg" id="closedlg" hidden role="dialog" aria-modal="true" aria-labelledby="closettl">
   <div class="dlgbox">
     <b id="closettl">タブを閉じますか？</b>
-    <p>書き込みはこのアプリの中だけに保存されています。タブを閉じると、このファイルの書き込みも消えます。</p>
+    <p>書き込みはPDFとして書き出していません。このまま閉じると、書き込みは消えて元に戻せません。</p>
     <div class="dlgbtns">
       <button class="btn" id="dlgcancel">キャンセル</button>
-      <button class="btn danger" id="dlgclose">書き出さずに閉じる</button>
+      <button class="btn danger" id="dlgclose">保存せずに閉じる</button>
       <button class="btn primary" id="dlgexport">書き出してから閉じる</button>
     </div>
   </div>
@@ -1437,7 +1437,7 @@ $('#addpage').onclick=()=>{
 
 /* ---------- documents & tabs ---------- */
 const PDFJS_OPTS = { isEvalSupported:false, useSystemFonts:true, cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/', cMapPacked:true, standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/' };
-function newDocObj(name){ return { id:uid(), name, hasBytes:false, pages:null, undo:[], redo:[], zoom:1, scroll:[0,0], pdf:null, bytes:null }; }
+function newDocObj(name){ return { id:uid(), name, hasBytes:false, pages:null, undo:[], redo:[], zoom:1, scroll:[0,0], pdf:null, bytes:null, dirty:false }; }
 async function buildDoc(doc, bytes, metaPages){
   doc.bytes=bytes||null; if (bytes) doc.hasBytes=true;
   const vps=[];
@@ -1458,7 +1458,7 @@ async function loadInto(doc){          // 保存してある書き込みと元�
   let metaPages=null;
   if (!doc.pages){
     const m=await kvGet('doc:'+doc.id); if (!m || !m.pages) throw new Error('書き込みデータが見つかりません');
-    metaPages=m.pages; doc.zoom=m.zoom||1; doc.scroll=m.scroll||[0,0]; if (m.name) doc.name=m.name;
+    metaPages=m.pages; doc.dirty=m.dirty!==false; doc.zoom=m.zoom||1; doc.scroll=m.scroll||[0,0]; if (m.name) doc.name=m.name;
   }
   const bytes = doc.hasBytes ? await kvGet('bytes:'+doc.id) : null;
   if (doc.hasBytes && !bytes) throw new Error('元のファイルが見つかりません');
@@ -1522,7 +1522,7 @@ async function hasInk(doc){
 }
 async function closeTab(doc, force){
   if (tabBusy) return;
-  if (!force && await hasInk(doc)){ askClose(doc); return; }
+  if (!force && doc.dirty!==false && await hasInk(doc)){ askClose(doc); return; }
   if (doc===D){
     const i=docs.indexOf(doc), next=docs[i+1]||docs[i-1];
     if (next) await activate(next);
@@ -1537,7 +1537,7 @@ async function closeTab(doc, force){
 }
 let closing=null;
 function askClose(doc){
-  closing=doc; $('#closettl').textContent=`「${doc.name}」を閉じますか？`;
+  closing=doc; $('#closettl').textContent=`「${doc.name}」はまだ書き出していません`;
   $('#closedlg').hidden=false; $('#dlgexport').focus();
 }
 function hideClose(){ $('#closedlg').hidden=true; closing=null; }
@@ -1612,7 +1612,7 @@ function serStroke(s){ const o={ id:s.id, tool:s.tool, color:s.color, w:s.w, pts
   if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; return o; }
 function metaOf(doc){
   const act = doc===D;
-  return { name:doc.name, hasBytes:doc.hasBytes, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
+  return { name:doc.name, hasBytes:doc.hasBytes, dirty:doc.dirty!==false, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
     pages:(doc.pages||[]).map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h,
       strokes:p.strokes.map(serStroke) })) };
 }
@@ -1622,8 +1622,9 @@ function saveFailed(){ if (saveWarned) return; saveWarned=true; toast('この端
 async function saveMeta(doc){ if (doc && doc.id && doc.pages){ const ok=await kvPut('doc:'+doc.id, metaOf(doc)); if (ok) saveWarned=false; else saveFailed(); return ok; } return true; }
 function saveTabs(){ return kvPut('tabs', { list:docs.map(d=>({ id:d.id, name:d.name, hasBytes:d.hasBytes })), active:D.id }); }
 function scheduleSave(ms=400){ clearTimeout(saveT); saveT=setTimeout(()=>{ if (cur){ scheduleSave(250); return; } saveMeta(D); }, ms); }   // 書いている最中は保存を後回しにする
-function changed(){ syncUI(); scheduleSave(); }
+function changed(){ if (D.id) D.dirty=true; syncUI(); scheduleSave(); }
 document.addEventListener('visibilitychange', ()=>{ if (document.hidden && D.id){ if (cur) finish(false); clearTimeout(saveT); saveMeta(D); saveTabs(); } });
+window.addEventListener('beforeunload', e=>{ if (D.id && D.dirty && D.pages && D.pages.some(p=>p.strokes.length)){ e.preventDefault(); e.returnValue=''; } });
 window.addEventListener('pagehide', ()=>{ if (D.id){ clearTimeout(saveT); saveMeta(D); saveTabs(); } });
 async function restore(){
   let tabs=await kvGet('tabs');
@@ -1718,6 +1719,7 @@ async function exportPdf(){
     const bytes=await out.save();
     const base=(D.name||'note').replace(/\.[^.]+$/,'');
     const r=await deliverFile(bytes, base+'_書き込み.pdf');
+    if (r==='shared' || r==='downloaded'){ D.dirty=false; saveMeta(D); }
     toast(r==='cancel' ? '書き出しをキャンセルしました' : r==='shared' ? '共有先を選んで保存してください' : 'PDFを保存しました');
     return r;
   } catch(err){
