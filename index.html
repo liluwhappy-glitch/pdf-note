@@ -24,15 +24,16 @@
   --desk:#e3e6eb; --bar:#fbfbfc; --line:#d5d9e0; --ink:#1b2230; --muted:#636c7d;
   --accent:#2457d6; --accent-soft:#e2e9fb; --hover:#eef0f4; --paper:#ffffff;
   --shadow:0 1px 2px rgba(18,28,48,.14),0 8px 24px rgba(18,28,48,.08);
+  --ft-pdf:#cf463c; --ft-word:#2b5fc4; --ft-excel:#1b7d45; --ft-ppt:#c25d22; --ft-note:#6b7484; --danger:#c42b1c;
   --f-ui:"IBM Plex Sans JP","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
   --f-num:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --desk:#15171b; --bar:#1f2227; --line:#30343c; --ink:#e7e9ee; --muted:#99a0ad;
+  --desk:#15171b; --danger:#ff7a6b; --bar:#1f2227; --line:#30343c; --ink:#e7e9ee; --muted:#99a0ad;
   --accent:#86a7ff; --accent-soft:#263252; --hover:#2a2e35; --paper:#ffffff;
   --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px rgba(0,0,0,.35); color-scheme:dark}}
 :root[data-theme="dark"]{
-  --desk:#15171b; --bar:#1f2227; --line:#30343c; --ink:#e7e9ee; --muted:#99a0ad;
+  --desk:#15171b; --danger:#ff7a6b; --bar:#1f2227; --line:#30343c; --ink:#e7e9ee; --muted:#99a0ad;
   --accent:#86a7ff; --accent-soft:#263252; --hover:#2a2e35; --paper:#ffffff;
   --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px rgba(0,0,0,.35); color-scheme:dark}
 html{height:100%;box-sizing:border-box;-webkit-text-size-adjust:100%}
@@ -49,6 +50,28 @@ button,label.btn{font:inherit;color:inherit}
 .grp{display:flex;align-items:center;gap:4px;min-width:0;flex:none}
 .docname{flex:1;min-width:0;text-align:center;font-weight:600;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
 .work{flex:1;min-height:0;position:relative;overflow:hidden}
+/* tabs: one per open file; the active tab joins the gray desk below */
+.tabs{flex:none;display:flex;align-items:flex-end;gap:2px;background:var(--bar);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;touch-action:pan-x;
+  padding-top:6px;padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));position:relative;z-index:5}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:0 1 230px;min-width:136px;height:38px;display:flex;align-items:center;gap:7px;padding:0 4px 0 10px;border:1px solid transparent;border-bottom:0;
+  border-radius:10px 10px 0 0;color:var(--muted);cursor:pointer;margin-bottom:-1px;font-size:13px;outline-offset:-3px}
+.tab:hover{background:var(--hover)}
+.tab[aria-selected="true"]{background:var(--desk);border-color:var(--line);color:var(--ink);font-weight:600}
+.tab:focus-visible{outline:2px solid var(--accent)}
+.tab .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tab .ft{flex:none;font-family:var(--f-num);font-size:9.5px;font-weight:500;line-height:1;color:#fff;border-radius:4px;padding:3px 4px;letter-spacing:.04em;background:var(--ft)}
+.tab .x{flex:none;width:28px;height:28px;border-radius:8px;border:0;background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer;padding:0}
+.tab .x:hover{background:var(--hover);color:var(--ink)}
+.tab .x:focus-visible{outline:2px solid var(--accent)}
+.tabadd{flex:none;width:36px;height:34px;margin:0 0 2px 4px;border-radius:9px;display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.tabadd:hover{background:var(--hover);color:var(--ink)}
+.dlg{position:fixed;inset:0;z-index:20;background:rgba(10,14,24,.38);display:grid;place-items:center;padding:16px}
+.dlgbox{background:var(--bar);color:var(--ink);border-radius:16px;box-shadow:var(--shadow);padding:20px 20px 16px;max-width:420px;display:flex;flex-direction:column;gap:8px;line-height:1.65}
+.dlgbox b{font-size:15px;text-wrap:balance}
+.dlgbox p{margin:0;font-size:13px;color:var(--muted)}
+.dlgbtns{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:8px}
+.btn.danger{color:var(--danger)}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;min-width:38px;padding:0 10px;
   border:0;border-radius:9px;background:transparent;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap}
@@ -165,6 +188,8 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
   </div>
 </header>
 
+<nav class="tabs" id="tabs" role="tablist" aria-label="開いているファイル"></nav>
+
 <div class="work" id="work">
   <main id="scroller"><div id="pages"></div></main>
 
@@ -215,6 +240,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <li>選択中のペンをもう一度タップすると、色と太さを変えられます</li>
     <li>線を引いて止めると直線に補正</li>
     <li>Word・Excel・PowerPointも「開く」から読み込めます（PDFに変換して表示）</li>
+    <li>開いたファイルはタブに並び、タップで切り替えられます</li>
     <li>書き込みはこの端末のブラウザに自動保存</li>
   </ul>
   <button class="btn" id="helpclose">閉じる</button>
@@ -228,6 +254,17 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
   <img src="icons/icon-180.png?v=3" alt="">
   <div><b>ホーム画面に追加できます</b><br>上の共有ボタン <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6.5"/></svg> →「ホーム画面に追加」</div>
   <button class="btn" id="installclose" aria-label="閉じる">✕</button>
+</div>
+<div class="dlg" id="closedlg" hidden role="dialog" aria-modal="true" aria-labelledby="closettl">
+  <div class="dlgbox">
+    <b id="closettl">タブを閉じますか？</b>
+    <p>書き込みはこのアプリの中だけに保存されています。タブを閉じると、このファイルの書き込みも消えます。</p>
+    <div class="dlgbtns">
+      <button class="btn" id="dlgcancel">キャンセル</button>
+      <button class="btn danger" id="dlgclose">書き出さずに閉じる</button>
+      <button class="btn primary" id="dlgexport">書き出してから閉じる</button>
+    </div>
+  </div>
 </div>
 <div id="toast" class="off" role="status"></div>
 
@@ -253,7 +290,8 @@ const st = { tool:'pen', color:{pen:0, hl:0}, size:{pen:1, hl:1, eraser:1}, widt
              pencilOnly:false, pencilSeen:false, zoom:1, fit:1 };
 try { const w=JSON.parse(localStorage.getItem('akanib-width')||'null');
   if (w) for (const t of ['pen','hl']) if (typeof w[t]==='number') st.width[t]=Math.min(WRANGE[t][1], Math.max(WRANGE[t][0], w[t])); } catch(e){}
-const D = { name:'', bytes:null, pdf:null, pages:[] };
+let D = { id:null, name:'', bytes:null, pdf:null, pages:[], undo:[], redo:[], zoom:1, scroll:[0,0] };   // 表示中のファイル
+let docs = [];                                                                                         // タブに並んでいるファイル
 let undoStack = [], redoStack = [];
 let uidN = Math.floor(Math.random()*1e6);
 const uid = () => (++uidN).toString(36) + Date.now().toString(36).slice(-3);
@@ -956,7 +994,7 @@ window.addEventListener('keydown', e=>{
   const map={p:'pen',h:'hl',e:'eraser',l:'lasso'}; const t=map[e.key.toLowerCase()];
   if (t) setTool(t);
   if ((e.key==='Delete'||e.key==='Backspace') && sel) $('#seldel').click();
-  if (e.key==='Escape'){ clearSel(); closePop(); }
+  if (e.key==='Escape'){ clearSel(); closePop(); if (!$('#closedlg').hidden) hideClose(); }
 });
 
 /* ---------- pages ---------- */
@@ -969,30 +1007,144 @@ $('#addpage').onclick=()=>{
   toast(`${curIndex+2}ページ目に方眼ページを追加しました`);
 };
 
-/* ---------- open / new ---------- */
-function resetView(){
-  clearSel(); if (live.parentNode) live.remove(); tipc.remove(); tipBox=null; livePage=null;
-  for (const p of D.pages){ freePage(p); }
-  undoStack=[]; redoStack=[]; st.zoom=1; scroller.scrollTop=0; scroller.scrollLeft=0;
-}
-async function openDoc(bytes, name, meta){
-  resetView();
-  if (D.pdf){ try{ D.pdf.destroy(); }catch(e){} D.pdf=null; }
-  D.bytes=bytes; D.name=name;
+/* ---------- documents & tabs ---------- */
+const PDFJS_OPTS = { isEvalSupported:false, useSystemFonts:true, cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/', cMapPacked:true, standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/' };
+function newDocObj(name){ return { id:uid(), name, hasBytes:false, pages:null, undo:[], redo:[], zoom:1, scroll:[0,0], pdf:null, bytes:null }; }
+async function buildDoc(doc, bytes, metaPages){
+  doc.bytes=bytes||null; if (bytes) doc.hasBytes=true;
   const vps=[];
   if (bytes){
-    D.pdf = await pdfjsLib.getDocument({ data:bytes.slice(), isEvalSupported:false, useSystemFonts:true, cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/', cMapPacked:true, standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/' }).promise;
-    for (let i=1;i<=D.pdf.numPages;i++){ const pg=await D.pdf.getPage(i); vps[i]=pg.getViewport({scale:1}); }
+    doc.pdf=await pdfjsLib.getDocument({ data:bytes.slice(), ...PDFJS_OPTS }).promise;
+    for (let i=1;i<=doc.pdf.numPages;i++){ const pg=await doc.pdf.getPage(i); vps[i]=pg.getViewport({scale:1}); }
   }
-  if (meta){
-    D.pages = meta.map(m=>({ id:m.id, kind:m.kind, src:m.src, w:m.w, h:m.h, vp:m.kind==='pdf'?vps[m.src]:null,
+  if (doc.pages){ for (const p of doc.pages) if (p.kind==='pdf') p.vp=vps[p.src]||p.vp; }
+  else if (metaPages){
+    doc.pages = metaPages.map(m=>({ id:m.id, kind:m.kind, src:m.src, w:m.w, h:m.h, vp:m.kind==='pdf'?vps[m.src]:null,
       strokes:(m.strokes||[]).map(s=>({ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts, done:true })) }))
       .filter(p=>p.kind!=='pdf' || p.vp);
   } else if (bytes){
-    D.pages = vps.slice(1).map((vp,i)=>({ id:uid(), kind:'pdf', src:i+1, w:vp.width, h:vp.height, vp, strokes:[] }));
-  } else D.pages=[blankPage(), blankPage(), blankPage()];
-  $('#docname').textContent=name;
-  mountPages(); syncUI();
+    doc.pages = vps.slice(1).map((vp,i)=>({ id:uid(), kind:'pdf', src:i+1, w:vp.width, h:vp.height, vp, strokes:[] }));
+  } else doc.pages=[blankPage(), blankPage(), blankPage()];
+}
+async function loadInto(doc){          // 保存してある書き込みと元ファイルを読み込む
+  let metaPages=null;
+  if (!doc.pages){
+    const m=await kvGet('doc:'+doc.id); if (!m || !m.pages) throw new Error('書き込みデータが見つかりません');
+    metaPages=m.pages; doc.zoom=m.zoom||1; doc.scroll=m.scroll||[0,0]; if (m.name) doc.name=m.name;
+  }
+  const bytes = doc.hasBytes ? await kvGet('bytes:'+doc.id) : null;
+  if (doc.hasBytes && !bytes) throw new Error('元のファイルが見つかりません');
+  await buildDoc(doc, bytes, metaPages);
+}
+function showDoc(doc){
+  D=doc; undoStack=doc.undo; redoStack=doc.redo; st.zoom=doc.zoom||1;
+  $('#docname').textContent=doc.name;
+  mountPages();
+  scroller.scrollLeft=doc.scroll[0]||0; scroller.scrollTop=doc.scroll[1]||0;
+  updateIndicator(); syncUI(); renderTabs(); saveTabs();
+}
+async function suspendDoc(){           // 切り替える前に、今のファイルを保存してメモリを空ける
+  const doc=D; if (!doc.id) return;
+  if (cur) finish(true);
+  doc.undo=undoStack; doc.redo=redoStack; doc.zoom=st.zoom; doc.scroll=[scroller.scrollLeft, scroller.scrollTop];
+  clearTimeout(saveT); await saveMeta(doc);
+  closePop(); clearSel(); if (live.parentNode) live.remove(); tipc.remove(); tipBox=null; livePage=null;
+  for (const p of doc.pages||[]){ if (p.el){ io.unobserve(p.el); freePage(p); } }
+  visible.clear();
+  if (doc.pdf){ try{ doc.pdf.destroy(); }catch(e){} doc.pdf=null; }
+  doc.bytes=null;
+}
+let tabBusy=false;
+async function activate(doc){
+  if (doc===D || tabBusy) return;
+  tabBusy=true;
+  const prev = D.id ? D : null;
+  try {
+    await suspendDoc();
+    try { await loadInto(doc); showDoc(doc); }
+    catch(err){
+      console.error(err); toast('このタブのファイルを読み込めませんでした：'+err.message, 5000);
+      docs=docs.filter(d=>d!==doc);
+      if (prev){ await loadInto(prev); showDoc(prev); } else renderTabs();
+    }
+  } finally { tabBusy=false; }
+}
+function nextNoteName(){
+  const used=new Set(docs.map(d=>d.name)); if (!used.has('新しいノート')) return '新しいノート';
+  for (let i=2;;i++) if (!used.has('新しいノート '+i)) return '新しいノート '+i;
+}
+async function openDoc(bytes, name){   // 新しいタブで開く
+  if (tabBusy) throw new Error('別のファイルを開いている途中です');
+  tabBusy=true;
+  const prev = D.id ? D : null;
+  try {
+    await suspendDoc();
+    const doc=newDocObj(name);
+    try { await buildDoc(doc, bytes, null); }
+    catch(err){ if (prev){ await loadInto(prev); showDoc(prev); } throw err; }
+    docs.push(doc); showDoc(doc);
+    if (bytes) await kvPut('bytes:'+doc.id, bytes);
+    await saveMeta(doc); await saveTabs();
+    return doc;
+  } finally { tabBusy=false; }
+}
+async function hasInk(doc){
+  if (doc.pages) return doc.pages.some(p=>p.strokes.length);
+  const m=await kvGet('doc:'+doc.id); return !!(m && m.pages && m.pages.some(p=>(p.strokes||[]).length));
+}
+async function closeTab(doc, force){
+  if (tabBusy) return;
+  if (!force && await hasInk(doc)){ askClose(doc); return; }
+  if (doc===D){
+    const i=docs.indexOf(doc), next=docs[i+1]||docs[i-1];
+    if (next) await activate(next);
+    else { await openDoc(null, nextNoteName()); }
+    if (D===doc) return;          // 切り替えに失敗したときは閉じない
+  }
+  docs=docs.filter(d=>d!==doc);
+  if (doc.pdf){ try{ doc.pdf.destroy(); }catch(e){} }
+  doc.pages=null; doc.undo=[]; doc.redo=[];
+  await kvDel('doc:'+doc.id); await kvDel('bytes:'+doc.id);
+  await saveTabs(); renderTabs();
+}
+let closing=null;
+function askClose(doc){
+  closing=doc; $('#closettl').textContent=`「${doc.name}」を閉じますか？`;
+  $('#closedlg').hidden=false; $('#dlgexport').focus();
+}
+function hideClose(){ $('#closedlg').hidden=true; closing=null; }
+$('#dlgcancel').onclick=hideClose;
+$('#closedlg').addEventListener('pointerdown', e=>{ if (e.target===$('#closedlg')) hideClose(); });
+$('#dlgclose').onclick=()=>{ const d=closing; hideClose(); if (d) closeTab(d, true); };
+$('#dlgexport').onclick=async()=>{
+  const d=closing; hideClose(); if (!d) return;
+  if (d!==D) await activate(d);
+  if (d!==D) return;
+  const r=await exportPdf();
+  if (r==='shared' || r==='downloaded') closeTab(d, true);
+  else if (r!=='cancel') toast('書き出せなかったため、タブは閉じていません', 4000);
+};
+const FT = { pdf:['PDF','--ft-pdf'], docx:['DOC','--ft-word'], xlsx:['XLS','--ft-excel'], xlsm:['XLS','--ft-excel'], xls:['XLS','--ft-excel'], csv:['CSV','--ft-excel'], pptx:['PPT','--ft-ppt'] };
+function renderTabs(){
+  const bar=$('#tabs'); bar.replaceChildren();
+  for (const d of docs){
+    const t=document.createElement('div'); t.className='tab'; t.setAttribute('role','tab'); t.tabIndex=0;
+    t.setAttribute('aria-selected', String(d===D)); t.title=d.name;
+    const [lab,tok]=FT[(d.name.split('.').pop()||'').toLowerCase()] || ['NOTE','--ft-note'];
+    const ft=document.createElement('span'); ft.className='ft'; ft.textContent=lab; ft.style.setProperty('--ft',`var(${tok})`);
+    const nm=document.createElement('span'); nm.className='nm'; nm.textContent=d.name;
+    const x=document.createElement('button'); x.className='x'; x.setAttribute('aria-label',`「${d.name}」を閉じる`); x.title='閉じる';
+    x.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>';
+    x.onclick=ev=>{ ev.stopPropagation(); closeTab(d); };
+    t.onclick=()=>activate(d);
+    t.onkeydown=ev=>{ if (ev.target===t && (ev.key==='Enter' || ev.key===' ')){ ev.preventDefault(); activate(d); } };
+    t.append(ft,nm,x); bar.append(t);
+    if (d===D) requestAnimationFrame(()=>{ try{ t.scrollIntoView({ inline:'nearest', block:'nearest' }); }catch(e){} });
+  }
+  const add=document.createElement('label'); add.className='tabadd'; add.htmlFor='file'; add.title='ファイルを開く（新しいタブ）';
+  add.setAttribute('aria-label','ファイルを新しいタブで開く');
+  add.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+  bar.append(add);
 }
 $('#file').addEventListener('change', async e=>{
   const f=e.target.files && e.target.files[0]; e.target.value='';
@@ -1007,14 +1159,13 @@ $('#file').addEventListener('change', async e=>{
   toast('PDFを読み込んでいます…', 8000);
   try {
     const bytes=new Uint8Array(await f.arrayBuffer());
-    await openDoc(bytes, f.name, null);
-    await saveBytes(); scheduleSave(0);
-    toast(`${D.pages.length}ページを開きました`);
+    await openDoc(bytes, f.name);
+    toast(`${D.pages.length}ページを新しいタブで開きました`);
   } catch(err){ console.error(err); toast('このファイルは開けませんでした。パスワード付きか、ファイルが壊れている可能性があります', 5000); }
 });
 $('#newnote').onclick=async()=>{
-  await openDoc(null, '新しいノート', null); await saveBytes(); scheduleSave(0);
-  toast('方眼ノートを3ページ作成しました');
+  try { await openDoc(null, nextNoteName()); toast('方眼ノートを新しいタブで作成しました'); }
+  catch(err){ toast(err.message, 3000); }
 };
 
 /* ---------- persistence (this browser only) ---------- */
@@ -1024,20 +1175,38 @@ function idb(){ if (!dbP) dbP=new Promise((res,rej)=>{ try{ const rq=indexedDB.o
   }catch(e){ rej(e); } }); return dbP; }
 async function kvPut(k,v){ try{ const db=await idb(); await new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').put(v,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); return true; }catch(e){ return false; } }
 async function kvGet(k){ try{ const db=await idb(); return await new Promise((res,rej)=>{ const rq=db.transaction('kv').objectStore('kv').get(k); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); }); }catch(e){ return undefined; } }
-async function saveBytes(){ await kvPut('bytes', D.bytes ? D.bytes : null); }
+async function kvDel(k){ try{ const db=await idb(); await new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
 let saveT;
-function scheduleSave(ms=700){ clearTimeout(saveT); saveT=setTimeout(()=>{
-  kvPut('meta', { name:D.name, hasBytes:!!D.bytes,
-    pages:D.pages.map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h,
-      strokes:p.strokes.map(s=>({ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts })) })) });
-}, ms); }
+function metaOf(doc){
+  const act = doc===D;
+  return { name:doc.name, hasBytes:doc.hasBytes, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
+    pages:(doc.pages||[]).map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h,
+      strokes:p.strokes.map(s=>({ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts })) })) };
+}
+async function saveMeta(doc){ if (doc && doc.id && doc.pages) await kvPut('doc:'+doc.id, metaOf(doc)); }
+function saveTabs(){ return kvPut('tabs', { list:docs.map(d=>({ id:d.id, name:d.name, hasBytes:d.hasBytes })), active:D.id }); }
+function scheduleSave(ms=700){ clearTimeout(saveT); saveT=setTimeout(()=>{ saveMeta(D); }, ms); }
 function changed(){ syncUI(); scheduleSave(); }
+document.addEventListener('visibilitychange', ()=>{ if (document.hidden && D.id){ clearTimeout(saveT); saveMeta(D); } });
 async function restore(){
-  const meta=await kvGet('meta'); if (!meta || !meta.pages) return false;
-  const bytes = meta.hasBytes ? await kvGet('bytes') : null;
-  if (meta.hasBytes && !bytes) return false;
-  await openDoc(bytes, meta.name, meta.pages);
-  return D.pages.length>0;
+  let tabs=await kvGet('tabs');
+  if (!tabs || !tabs.list || !tabs.list.length){           // 以前の版（タブなし）で保存した書き込みを引き継ぐ
+    const meta=await kvGet('meta'); if (!meta || !meta.pages) return false;
+    const bytes = meta.hasBytes ? await kvGet('bytes') : null;
+    if (meta.hasBytes && !bytes) return false;
+    const id=uid();
+    await kvPut('doc:'+id, { name:meta.name, hasBytes:!!bytes, zoom:1, scroll:[0,0], pages:meta.pages });
+    if (bytes) await kvPut('bytes:'+id, bytes);
+    tabs={ list:[{ id, name:meta.name, hasBytes:!!bytes }], active:id };
+    await kvPut('tabs', tabs); await kvDel('meta'); await kvDel('bytes');
+  }
+  docs=tabs.list.map(t=>Object.assign(newDocObj(t.name), { id:t.id, hasBytes:!!t.hasBytes }));
+  const order=[docs.find(d=>d.id===tabs.active), ...docs].filter((d,i,a)=>d && a.indexOf(d)===i);
+  for (const d of order){
+    try { await loadInto(d); showDoc(d); return true; }
+    catch(e){ console.error(e); docs=docs.filter(x=>x!==d); }
+  }
+  return false;
 }
 
 /* ---------- export ---------- */
@@ -1054,8 +1223,8 @@ async function deliverFile(bytes, filename){
   a.href=url; a.download=filename; document.body.append(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 60000); return 'downloaded';
 }
-$('#export').onclick=async()=>{
-  const btn=$('#export'); if (btn.disabled) return;
+async function exportPdf(){
+  const btn=$('#export'); if (btn.disabled) return 'busy';
   btn.disabled=true; toast('PDFを作成しています…', 20000);
   try {
     const { PDFDocument, LineCapStyle, rgb } = PDFLib;
@@ -1095,10 +1264,12 @@ $('#export').onclick=async()=>{
     const base=(D.name||'note').replace(/\.[^.]+$/,'');
     const r=await deliverFile(bytes, base+'_書き込み.pdf');
     toast(r==='cancel' ? '書き出しをキャンセルしました' : r==='shared' ? '共有先を選んで保存してください' : 'PDFを保存しました');
+    return r;
   } catch(err){
-    console.error(err); toast('PDFの作成に失敗しました', 4000);
+    console.error(err); toast('PDFの作成に失敗しました', 4000); return 'error';
   } finally { btn.disabled=false; }
-};
+}
+$('#export').onclick=()=>exportPdf();
 
 /* ---------- Office import (Word / Excel / PowerPoint → PDF pages) ---------- */
 const LIBS = {
@@ -1688,9 +1859,8 @@ async function importOffice(file){
   else if (kind==='Excel') pages=await renderXlsx(ext==='csv' ? new Uint8Array(buf) : buf, say);
   else { pages=await renderPptx(buf, say); fmt='jpg'; }
   const bytes=await pagesToPdf(pages, fmt, (i,n)=>say(`PDFを作成 ${i} / ${n}`));
-  await openDoc(bytes, file.name, null);
-  await saveBytes(); scheduleSave(0);
-  toast(`${kind}を${D.pages.length}ページのノートとして開きました`);
+  await openDoc(bytes, file.name);
+  toast(`${kind}を${D.pages.length}ページにして新しいタブで開きました`);
 }
 
 /* ---------- sample document ---------- */
@@ -1751,7 +1921,7 @@ async function makeSample(){
 }
 async function loadSample(){
   const bytes=await makeSample();
-  await openDoc(bytes, 'サンプル図面.pdf', null);
+  await openDoc(bytes, 'サンプル図面.pdf');
   const p=D.pages[0], H=p.h;
   const disp = y => H - y;
   p.strokes.push({ id:uid(), tool:'pen', color:'#d6322b', w:1.2, done:true,
@@ -1760,7 +1930,7 @@ async function loadSample(){
   const cx=(100+100+8*51.59)/2;
   p.strokes.push({ id:uid(), tool:'hl', color:'#ffd400', w:12, done:true, pts:[cx-17,hy,.5, cx+17,hy,.5] });
   redrawInk(p);
-  await saveBytes(); scheduleSave(0);
+  scheduleSave(0);
 }
 
 /* ---------- boot ---------- */
