@@ -237,6 +237,8 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M14 4l6 6-7.5 7.5h-3L7 15v-3z"/><path d="M7 15l-3 3.5h5"/></svg></button>
     <button class="tb" data-tool="eraser" aria-label="消しゴム (E)" title="消しゴム (E)：もう一度タップで大きさ">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M9 19.5L3.8 14.3a1.5 1.5 0 0 1 0-2.1l7.4-7.4a1.5 1.5 0 0 1 2.1 0l5.6 5.6a1.5 1.5 0 0 1 0 2.1l-7.6 7z"/><path d="M8 9l7 7M9 19.5h11"/></svg></button>
+    <button class="tb" data-tool="select" aria-label="選択 (V)" title="選択：タップで選んでドラッグで移動、四隅の丸で大きさ、空いたところをドラッグで範囲選択 (V)">
+      <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6 3.5l12 7.2-5.2 1.3 3 5.6-2.3 1.2-3-5.6L6 17.5z" fill-opacity=".14"/></svg></button>
     <button class="tb" data-tool="lasso" aria-label="なげなわ (L)" title="なげなわ：囲んで移動・削除 (L)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="3 2.6"><path d="M12 4c4.7 0 8 2.4 8 5.5S16.7 15 12 15s-8-2.4-8-5.5S7.3 4 12 4z"/><path d="M7.5 14c-.8 1.5-.3 3.3 1.5 4.3" stroke-dasharray="none"/></svg></button>
     <button class="tb" data-tool="shape" aria-label="図形 (S)" title="図形：四角・円・矢印・雲など (S)。もう一度タップで色・塗りつぶし">
@@ -279,6 +281,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <li>選択中のペンをもう一度タップすると、色と太さを変えられます</li>
     <li>線を引いて止めると直線に補正</li>
     <li>図形ツールで四角・円・矢印・雲などを描けます（線の色と塗りつぶしを選べます）。なげなわでタップして選ぶと、四隅の丸で大きさを変えられます</li>
+    <li>「選択」ツール（矢印）で、図形・画像・線をタップして選び、そのままドラッグで移動できます</li>
     <li>画像ボタンから、撮影した写真や画像をページに貼れます</li>
     <li>Word・Excel・PowerPointも「開く」から読み込めます（PDFに変換して表示）</li>
     <li>開いたファイルはタブに並び、タップで切り替えられます</li>
@@ -303,15 +306,14 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <b>画像をページに貼る</b>
     <p>貼ったあとは、なげなわで選ぶと移動・拡大縮小・削除ができ、上からペンで書き込めます。</p>
     <div class="dlgbtns">
-      <div class="grp2"><label class="btn primary" for="im-cam">カメラで撮影</label><label class="btn" for="im-lib">写真から選ぶ</label></div>
+      <div class="grp2"><label class="btn primary" for="sc-cam" data-scan="trim">カメラで撮影</label><label class="btn" for="sc-lib" data-scan="trim">写真から選ぶ</label></div>
+      <p>撮ったあとに、必要な部分だけ切り取る（トリミング）画面が出ます</p>
       <p style="margin-top:6px">紙や図面を撮るときは、台形補正と影とりをしてから貼れます</p>
       <div class="grp2"><label class="btn" for="sc-cam" data-scan="insert">撮影して補正</label><label class="btn" for="sc-lib" data-scan="insert">写真を補正</label></div>
       <button class="btn" id="im-x" style="justify-content:center">キャンセル</button>
     </div>
   </div>
 </div>
-<input id="im-cam" class="vh" type="file" accept="image/*" capture="environment">
-<input id="im-lib" class="vh" type="file" accept="image/*" multiple>
 <div class="dlg" id="scandlg" hidden role="dialog" aria-modal="true" aria-label="スキャン">
   <div class="dlgbox">
     <b>書類をスキャン</b>
@@ -331,7 +333,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
   <div class="scbtm" id="sc-b-crop">
     <button class="btn" id="sc-rl">⟲ 左へ回す</button><button class="btn" id="sc-rr">⟳ 右へ回す</button>
     <button class="btn" id="sc-auto">自動で枠を合わせる</button><button class="btn" id="sc-full">全体にする</button>
-    <span class="scmsg">四隅の丸をドラッグして、紙の角に合わせてください</span>
+    <span class="scmsg" id="sc-cropmsg">四隅の丸をドラッグして、紙の角に合わせてください</span>
   </div>
   <div class="scbtm" id="sc-b-fin" hidden>
     <div class="seg" id="sc-filt">
@@ -826,6 +828,12 @@ function drawSel(dx=0, dy=0){
   lctx.strokeRect(x0-pad+dx,y0-pad+dy,x1-x0+pad*2,y1-y0+pad*2); lctx.setLineDash([]);
   if (!dx && !dy && sel.ids.size===1){ const o=sel.p.strokes.find(q=>sel.ids.has(q.id)); if (o && (o.tool==='shape'||o.tool==='img')) drawHandles(handlePts(o)); }
 }
+function selPick(p,x,y,k){     // 選択ツール：押した場所にある物を選ぶ（すでに選んでいる物ならそのまま）
+  if (st.tool!=='select') return false;
+  const h=topHit(p,x,y,10/k); if (!h) return false;
+  if (sel && sel.p===p && sel.ids.has(h.id)) return true;
+  setSel(p, new Set([h.id])); return true;
+}
 function drawHandles(hs){ const px=1/cssK(); lctx.setLineDash([]);
   for (const [x,y] of hs){ lctx.beginPath(); lctx.arc(x,y,7*px,0,Math.PI*2); lctx.fillStyle='#fff'; lctx.fill(); lctx.strokeStyle=SEL_COLOR; lctx.lineWidth=2.2*px; lctx.stroke(); } }
 function inSel(x,y){ if(!sel) return false; const pad=14/cssK(), [a,b,c,d]=sel.bb; return x>=a-pad&&x<=c+pad&&y>=b-pad&&y<=d+pad; }
@@ -906,8 +914,8 @@ pagesEl.addEventListener('pointerdown', e => {
     if (sel && sel.p===p && sel.ids.size===1){ hs=p.strokes.find(q=>sel.ids.has(q.id)); if (hs && (hs.tool==='shape'||hs.tool==='img')){ const H=handlePts(hs), rr=24/cur.k;
       for (let i=0;i<H.length;i++) if (Math.hypot(x-H[i][0],y-H[i][1])<=rr){ hd=i; break; } } }
     if (hd>=0){ cur.mode='resize'; cur.s=hs; cur.hi=hd; cur.tmp=hs; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawCur(); }
-    else if (sel && sel.p===p && inSel(x,y)){ cur.mode='move'; cur.start=[x,y]; cur.dx=0; cur.dy=0; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawSel(); }
-    else { clearSel(); attachLive(p); cur.mode='lasso'; cur.poly=[x,y]; drawCur(); }
+    else if (selPick(p,x,y,cur.k) || (sel && sel.p===p && inSel(x,y))){ cur.mode='move'; cur.start=[x,y]; cur.dx=0; cur.dy=0; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawSel(); }
+    else { clearSel(); attachLive(p); cur.mode='lasso'; cur.poly=[x,y]; cur.rect=(st.tool==='select'); cur.a0=[x,y]; drawCur(); }
   }
 });
 window.addEventListener('pointermove', e => {
@@ -958,7 +966,7 @@ function addPoint(ev){
   } else if (cur.mode==='erase'){
     eraseSeg(cur.last[0],cur.last[1],x,y); cur.last=[x,y];
   } else if (cur.mode==='lasso'){
-    cur.poly.push(x,y);
+    if (cur.rect){ const a=cur.a0; cur.poly=[a[0],a[1],x,a[1],x,y,a[0],y]; } else cur.poly.push(x,y);
   } else if (cur.mode==='move'){
     cur.dx=x-cur.start[0]; cur.dy=y-cur.start[1];
   } else if (cur.mode==='shape'){
@@ -1237,7 +1245,7 @@ function syncUI(){
   document.querySelector('[data-tool="shape"]').style.setProperty('--mark', st.shape.color || 'transparent');
   const cb=$('#colorbtn');
   const shapeUI = st.tool==='shape' || st.editSel;
-  const hasOpts = st.tool!=='lasso';
+  const hasOpts = st.tool!=='lasso' && st.tool!=='select';
   cb.disabled=!hasOpts;
   cb.style.setProperty('--cur', st.tool==='shape' ? (st.shape.color||st.shape.fill||'var(--muted)') : st.tool==='pen' ? PEN_COLORS[st.color.pen][0] : st.tool==='hl' ? HL_COLORS[st.color.hl][0] : 'var(--muted)');
   const sw=$('#swatches'); sw.replaceChildren();
@@ -1281,10 +1289,10 @@ function syncUI(){
   $('#pencil').setAttribute('aria-pressed', String(st.pencilOnly));
   $('#undo').disabled=!undoStack.length; $('#redo').disabled=!redoStack.length;
 }
-function setTool(t){ st.tool=t; if (t!=='lasso') clearSel(); closePop(); syncUI(); }
+function setTool(t){ st.tool=t; if (t!=='lasso' && t!=='select') clearSel(); closePop(); syncUI(); }
 document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>{
   const t=b.dataset.tool;
-  if (st.tool===t && t!=='lasso') togglePop(b); else setTool(t);
+  if (st.tool===t && t!=='lasso' && t!=='select') togglePop(b); else setTool(t);
 });
 
 /* ---------- popover & toolbar docking ---------- */
@@ -1292,7 +1300,7 @@ const workEl=$('#work'), popEl=$('#pop'), tbEl=$('#toolbar');
 function closePop(){ popEl.hidden=true; $('#colorbtn').setAttribute('aria-expanded','false'); if (st.editSel){ st.editSel=false; syncUI(); } }
 function togglePop(anchor){
   if (!popEl.hidden){ closePop(); return; }
-  if (st.tool==='lasso' && !st.editSel) return;
+  if ((st.tool==='lasso' || st.tool==='select') && !st.editSel) return;
   popEl.hidden=false; $('#colorbtn').setAttribute('aria-expanded','true');
   const w=workEl.getBoundingClientRect(), a=anchor.getBoundingClientRect(), pw=popEl.offsetWidth, ph=popEl.offsetHeight;
   let x,y;
@@ -1346,7 +1354,7 @@ window.addEventListener('keydown', e=>{
   if (mod && e.key.toLowerCase()==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
   if (mod && e.key.toLowerCase()==='y'){ e.preventDefault(); redo(); return; }
   if (mod) return;
-  const map={p:'pen',h:'hl',e:'eraser',l:'lasso',s:'shape'}; const t=map[e.key.toLowerCase()];
+  const map={p:'pen',h:'hl',e:'eraser',l:'lasso',s:'shape',v:'select'}; const t=map[e.key.toLowerCase()];
   if (t) setTool(t);
   if ((e.key==='Delete'||e.key==='Backspace') && sel) $('#seldel').click();
   if (e.key==='Escape'){ clearSel(); closePop(); if (!$('#closedlg').hidden) hideClose(); }
@@ -2771,6 +2779,14 @@ function scShowCrop(){
 }
 function scDrawOv(){
   const ov=scEl('sc-ov'), q=SC.quad.map(p=>[p[0]*SC.k, p[1]*SC.k]);
+  if (SC.mode==='trim'){
+    const W=+ov.getAttribute('width'), H=+ov.getAttribute('height'), [a,b,c,d]=q, hs=[a,b,c,d,[(a[0]+b[0])/2,a[1]],[b[0],(b[1]+c[1])/2],[(a[0]+b[0])/2,c[1]],[a[0],(a[1]+d[1])/2]];
+    ov.innerHTML=`<path fill-rule="evenodd" d="M0 0H${W}V${H}H0Z M${a[0]} ${a[1]}H${b[0]}V${c[1]}H${a[0]}Z" fill="rgba(0,0,0,.55)"/>`+
+      `<rect x="${a[0]}" y="${a[1]}" width="${b[0]-a[0]}" height="${c[1]-a[1]}" fill="none" stroke="#fff" stroke-width="2"/>`+
+      [1,2].map(i=>`<path d="M${a[0]+(b[0]-a[0])*i/3} ${a[1]}V${c[1]}M${a[0]} ${a[1]+(c[1]-a[1])*i/3}H${b[0]}" stroke="rgba(255,255,255,.4)" stroke-width="1"/>`).join('')+
+      hs.map((p,i)=>`<circle data-i="${i}" cx="${p[0]}" cy="${p[1]}" r="26" fill="rgba(255,255,255,.01)"/><circle cx="${p[0]}" cy="${p[1]}" r="${i<4?10:7}" fill="#fff" stroke="#2457d6" stroke-width="3" pointer-events="none"/>`).join('');
+    return;
+  }
   ov.innerHTML=`<polygon points="${q.map(p=>p.join(',')).join(' ')}" fill="rgba(134,167,255,.14)" stroke="#86a7ff" stroke-width="2"/>`+
     q.map((p,i)=>`<circle data-i="${i}" cx="${p[0]}" cy="${p[1]}" r="30" fill="rgba(134,167,255,.01)"/><circle cx="${p[0]}" cy="${p[1]}" r="11" fill="#fff" stroke="#2457d6" stroke-width="3" pointer-events="none"/>`).join('');
 }
@@ -2780,7 +2796,13 @@ scEl('sc-ov').addEventListener('pointerdown', e=>{
 scEl('sc-ov').addEventListener('pointermove', e=>{
   if (scDrag==null) return; const r=scEl('sc-ov').getBoundingClientRect();
   const x=Math.min(SC.src.width,Math.max(0,(e.clientX-r.left)/SC.k)), y=Math.min(SC.src.height,Math.max(0,(e.clientY-r.top)/SC.k));
-  SC.quad[scDrag]=[x,y]; scDrawOv(); e.preventDefault(); });
+  if (SC.mode==='trim'){
+    let [x0,y0]=SC.quad[0], [x1,y1]=SC.quad[2]; const i=scDrag, mn=24/SC.k;
+    if (i===0||i===3||i===7) x0=Math.min(x,x1-mn); if (i===1||i===2||i===5) x1=Math.max(x,x0+mn);
+    if (i===0||i===1||i===4) y0=Math.min(y,y1-mn); if (i===2||i===3||i===6) y1=Math.max(y,y0+mn);
+    SC.quad=[[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+  } else SC.quad[scDrag]=[x,y];
+  scDrawOv(); e.preventDefault(); });
 const scUp=()=>{ scDrag=null; };
 scEl('sc-ov').addEventListener('pointerup', scUp); scEl('sc-ov').addEventListener('pointercancel', scUp);
 function scRotate(dir){
@@ -2864,8 +2886,8 @@ function scSetStep(s){
   SC.step=s; const cr=s==='crop', fi=s==='fin', bt=s==='btw';
   scEl('sc-b-crop').hidden=!cr; scEl('sc-b-fin').hidden=!fi; scEl('sc-b-btw').hidden=!bt;
   scEl('sc-ov').style.display=cr?'':'none'; scEl('sc-cv').hidden=bt; scEl('sc-th').hidden=!bt;
-  scEl('sc-title').textContent = cr?'範囲を合わせる' : fi?'仕上がりを選ぶ' : `${SC.pages.length}枚を追加しました`;
-  scEl('sc-next').textContent = cr?'次へ' : fi?'完了' : (SC.mode==='insert'?'ページに貼る':'PDFにして開く');
+  scEl('sc-title').textContent = cr?(SC.mode==='trim'?'トリミング':'範囲を合わせる') : fi?'仕上がりを選ぶ' : `${SC.pages.length}枚を追加しました`;
+  scEl('sc-next').textContent = cr?(SC.mode==='trim'?(SC.queue.length?'次へ':'貼る'):'次へ') : fi?'完了' : (SC.mode!=='pdf'?'ページに貼る':'PDFにして開く');
   scEl('sc-next').disabled = bt && !SC.pages.length;
 }
 /* いま編集中の1枚をページとして確定（同期処理：カメラ起動の操作中に呼べるように） */
@@ -2886,8 +2908,10 @@ async function scNextImage(){
   while (SC.queue.length){
     const f=SC.queue.shift();
     try {
-      SC.src=await scLoad(f); SC.quad=scAutoQuad(); SC.filt='clear'; scEl('sc-br').value=0; scEl('sc-ct').value=0;
-      scSetStep('crop'); scShowCrop(); return;
+      SC.src=await scLoad(f); SC.quad= SC.mode==='trim' ? [[0,0],[SC.src.width,0],[SC.src.width,SC.src.height],[0,SC.src.height]] : scAutoQuad(); SC.filt='clear'; scEl('sc-br').value=0; scEl('sc-ct').value=0;
+      scSetStep('crop'); scEl('sc-auto').hidden=(SC.mode==='trim');
+      scEl('sc-cropmsg').textContent = SC.mode==='trim' ? '四隅や辺の丸をドラッグして、残したい範囲を決めてください（そのまま貼るなら、そのまま右上へ）' : '四隅の丸をドラッグして、紙の角に合わせてください';
+      scShowCrop(); return;
     } catch(err){ toast('画像を読み込めませんでした：'+f.name, 3500); }
   }
   if (SC.pages.length) scShowBetween(); else scClose();
@@ -2896,7 +2920,7 @@ function scOpenUI(){ scEl('scan').hidden=false; scEl('scandlg').hidden=true; doc
 function scClose(){ scEl('scan').hidden=true; SC.pages=[]; SC.queue=[]; SC.src=SC.base=SC.prev=null; }
 async function scFinish(){
   if (!SC.pages.length) return;
-  if (SC.mode==='insert'){ scEl('sc-next').disabled=true; return scInsert(); }
+  if (SC.mode==='insert' || SC.mode==='trim'){ scEl('sc-next').disabled=true; return scInsert(); }
   scEl('sc-next').disabled=true; toast('PDFを作成しています…', 60000);
   try {
     const doc=await PDFLib.PDFDocument.create();
@@ -2919,13 +2943,21 @@ for (const id of ['sc-cam','sc-lib']) scEl(id).addEventListener('change', async 
 scEl('sc-cancel').onclick=()=>{ if (SC.pages.length && !confirm('撮影した内容を破棄しますか？')) return; scClose(); };
 scEl('sc-rl').onclick=()=>scRotate(-1); scEl('sc-rr').onclick=()=>scRotate(1);
 scEl('sc-auto').onclick=()=>{ SC.quad=scAutoQuad(); scDrawOv(); };
+function scTrimCommit(){
+  const [x0,y0]=SC.quad[0], [x1,y1]=SC.quad[2], w=Math.max(8,Math.round(x1-x0)), h=Math.max(8,Math.round(y1-y0));
+  const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(SC.src, x0, y0, x1-x0, y1-y0, 0, 0, w, h);
+  const d=shrinkImg(c, 1600, false), t=document.createElement('canvas'); t.width=Math.max(1,Math.round(w*160/Math.max(w,h))); t.height=Math.max(1,Math.round(h*160/Math.max(w,h)));
+  t.getContext('2d').drawImage(c,0,0,t.width,t.height);
+  SC.pages.push({ jpg:d.url, wPt:w, hPt:h, thumb:t.toDataURL('image/jpeg',0.7) }); c.width=c.height=0; SC.src=null;
+}
 scEl('sc-full').onclick=()=>{ SC.quad=scDefaultQuad().map((p,i)=>[[0,0],[SC.src.width,0],[SC.src.width,SC.src.height],[0,SC.src.height]][i]); scDrawOv(); };
 scEl('sc-back').onclick=()=>{ scSetStep('crop'); scShowCrop(); };
 scEl('sc-filt').addEventListener('click', e=>{ const b=e.target.closest('[data-f]'); if (!b) return; SC.filt=b.dataset.f; scPaintPrev(); });
 for (const id of ['sc-br','sc-ct']) scEl(id).addEventListener('input', ()=>{ clearTimeout(SC.pt); SC.pt=setTimeout(scPaintPrev, 30); });
 scEl('sc-more').onclick=()=>{ scCommit(); scShowBetween(); };
 scEl('sc-next').onclick=()=>{
-  if (SC.step==='crop'){ scEl('sc-next').disabled=true; setTimeout(()=>{ scEnterFinish(); scEl('sc-next').disabled=false; }, 20); }
+  if (SC.step==='crop' && SC.mode==='trim'){ scTrimCommit(); if (SC.queue.length) scNextImage(); else scFinish(); }
+  else if (SC.step==='crop'){ scEl('sc-next').disabled=true; setTimeout(()=>{ scEnterFinish(); scEl('sc-next').disabled=false; }, 20); }
   else if (SC.step==='fin'){ scCommit(); if (SC.queue.length) scNextImage(); else scFinish(); }
   else scFinish();
 };
@@ -2952,7 +2984,7 @@ function insertImg(p, url, iw, ih, n=0){
   const before=p.strokes.slice(); p.strokes=p.strokes.concat([s]); pushAction({t:'set', p, before, after:p.strokes.slice()});
   redrawInk(p); return s;
 }
-function selectNew(p, s){ setTool('lasso'); setSel(p, new Set([s.id])); }
+function selectNew(p, s){ setTool('select'); setSel(p, new Set([s.id])); }
 async function insertPhotos(files){
   const p=targetPage(); if (!p){ toast('先にファイルを開いてください'); return; }
   let last=null, n=0;
@@ -2972,10 +3004,7 @@ async function scInsert(){
 imgEl('imgbtn').onclick=()=>{ closePop(); imgEl('imgdlg').hidden=false; };
 imgEl('im-x').onclick=()=>{ imgEl('imgdlg').hidden=true; };
 imgEl('imgdlg').addEventListener('pointerdown', e=>{ if (e.target===imgEl('imgdlg')) imgEl('imgdlg').hidden=true; });
-for (const id of ['im-cam','im-lib']) imgEl(id).addEventListener('change', async e=>{
-  const fs=[...(e.target.files||[])]; e.target.value=''; imgEl('imgdlg').hidden=true; if (fs.length) await insertPhotos(fs);
-});
-imgEl('imgdlg').querySelectorAll('[data-scan]').forEach(l=>l.addEventListener('click', ()=>{ SC.mode='insert'; }));
+imgEl('imgdlg').querySelectorAll('[data-scan]').forEach(l=>l.addEventListener('click', ()=>{ SC.mode=l.dataset.scan; }));
 imgEl('scandlg').querySelectorAll('label').forEach(l=>l.addEventListener('click', ()=>{ SC.mode='pdf'; }));
 
 /* ---------- sample document ---------- */
