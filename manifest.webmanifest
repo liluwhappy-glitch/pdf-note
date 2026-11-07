@@ -1,0 +1,17 @@
+{
+  "name": "PDF手書きノート",
+  "short_name": "手書きノート",
+  "description": "Apple PencilでPDFに書き込めるノート",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#e3e6eb",
+  "theme_color": "#fbfbfc",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
