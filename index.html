@@ -101,6 +101,8 @@ button,label.btn{font:inherit;color:inherit}
   background:var(--ink);color:var(--bar);padding:10px 14px;border-radius:10px;font-size:13px;max-width:calc(100% - 48px);
   box-shadow:var(--shadow);transition:opacity .2s}
 #toast.off{opacity:0;pointer-events:none}
+.stage{position:absolute;left:-30000px;top:0;background:#fff;color:#000;width:max-content}
+.stage section.docx{box-shadow:none!important;margin:0!important}
 .vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
 
 .help{position:fixed;left:max(16px,calc(env(safe-area-inset-left,0px) + 12px));bottom:calc(env(safe-area-inset-bottom,0px) + 16px);z-index:4;
@@ -121,10 +123,10 @@ button,label.btn{font:inherit;color:inherit}
 
 <header class="bar">
   <div class="grp file">
-    <label class="btn" for="file" title="PDFを開く">
+    <label class="btn" for="file" title="PDF・Word・Excel・PowerPointを開く">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/></svg><span>開く</span>
     </label>
-    <input id="file" class="vh" type="file" accept="application/pdf,.pdf">
+    <input id="file" class="vh" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.presentationml.presentation">
     <button class="btn" id="newnote" title="方眼ノートを新規作成">新規</button>
     <span class="docname" id="docname">読み込み中…</span>
   </div>
@@ -174,6 +176,7 @@ button,label.btn{font:inherit;color:inherit}
     <li>Apple Pencilで書くと自動で「Pencilのみ」になり、指はスクロールに使えます</li>
     <li>2本指でピンチ拡大・移動、2本指タップで取り消し、3本指タップでやり直し</li>
     <li>線を引いて止めると直線に補正</li>
+    <li>Word・Excel・PowerPointも「開く」から読み込めます（PDFに変換して表示）</li>
     <li>書き込みはこの端末のブラウザに自動保存</li>
   </ul>
   <button class="btn" id="helpclose">閉じる</button>
@@ -729,13 +732,20 @@ async function openDoc(bytes, name, meta){
 $('#file').addEventListener('change', async e=>{
   const f=e.target.files && e.target.files[0]; e.target.value='';
   if (!f) return;
+  const ext=(f.name.split('.').pop()||'').toLowerCase();
+  if (ext==='doc' || ext==='ppt'){ toast('古い形式（.doc / .ppt）は開けません。Word・PowerPointで .docx / .pptx として保存し直してください', 6000); return; }
+  if (OFFICE_EXT[ext]){
+    try { await importOffice(f); }
+    catch(err){ console.error(err); toast('変換できませんでした：'+(err && err.message ? err.message : 'ファイルを確認してください'), 6000); }
+    return;
+  }
   toast('PDFを読み込んでいます…', 8000);
   try {
     const bytes=new Uint8Array(await f.arrayBuffer());
     await openDoc(bytes, f.name, null);
     await saveBytes(); scheduleSave(0);
     toast(`${D.pages.length}ページを開きました`);
-  } catch(err){ console.error(err); toast('このPDFは開けませんでした。パスワード付きか、ファイルが壊れている可能性があります', 5000); }
+  } catch(err){ console.error(err); toast('このファイルは開けませんでした。パスワード付きか、ファイルが壊れている可能性があります', 5000); }
 });
 $('#newnote').onclick=async()=>{
   await openDoc(null, '新しいノート', null); await saveBytes(); scheduleSave(0);
@@ -810,13 +820,606 @@ $('#export').onclick=async()=>{
       }
     }
     const bytes=await out.save();
-    const base=(D.name||'note').replace(/\.pdf$/i,'');
+    const base=(D.name||'note').replace(/\.[^.]+$/,'');
     const r=await deliverFile(bytes, base+'_書き込み.pdf');
     toast(r==='cancel' ? '書き出しをキャンセルしました' : r==='shared' ? '共有先を選んで保存してください' : 'PDFを保存しました');
   } catch(err){
     console.error(err); toast('PDFの作成に失敗しました', 4000);
   } finally { btn.disabled=false; }
 };
+
+/* ---------- Office import (Word / Excel / PowerPoint → PDF pages) ---------- */
+const LIBS = {
+  jszip:'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+  h2c:'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+  xlsx:'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  docx:'https://cdn.jsdelivr.net/npm/docx-preview@0.4.1/dist/docx-preview.min.js'
+};
+const OFFICE_EXT = { docx:'Word', xlsx:'Excel', xlsm:'Excel', xls:'Excel', csv:'Excel', pptx:'PowerPoint' };
+const loadedLibs = {};
+function loadScript(src){
+  if (loadedLibs[src]) return loadedLibs[src];
+  loadedLibs[src] = new Promise((res, rej) => {
+    const s=document.createElement('script'); s.src=src; s.onload=res;
+    s.onerror=()=>{ delete loadedLibs[src]; rej(new Error('ライブラリを読み込めませんでした（通信を確認してください）')); };
+    document.head.append(s);
+  });
+  return loadedLibs[src];
+}
+const UI_FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif';
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
+
+function sliceCanvas(src, sliceH){
+  if (src.height <= sliceH*1.06) return [src];
+  const out=[];
+  for (let y=0; y<src.height; y+=sliceH){
+    const h=Math.min(sliceH, src.height-y);
+    const c=document.createElement('canvas'); c.width=src.width; c.height=sliceH;
+    const x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height);
+    x.drawImage(src, 0, y, src.width, h, 0, 0, src.width, h);
+    out.push(c);
+  }
+  src.width=0; src.height=0;
+  return out;
+}
+async function pagesToPdf(pages, fmt, prog){
+  const doc=await PDFLib.PDFDocument.create();
+  for (let i=0;i<pages.length;i++){
+    const pg=pages[i]; prog && prog(i+1, pages.length);
+    const blob=await new Promise(r=>pg.canvas.toBlob(r, fmt==='jpg'?'image/jpeg':'image/png', 0.9));
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    const img = fmt==='jpg' ? await doc.embedJpg(bytes) : await doc.embedPng(bytes);
+    const p=doc.addPage([pg.wPt, pg.hPt]);
+    p.drawImage(img, { x:0, y:0, width:pg.wPt, height:pg.hPt });
+    pg.canvas.width=0; pg.canvas.height=0;
+  }
+  return await doc.save();
+}
+
+/* ----- Word ----- */
+async function renderDocx(buf, prog){
+  await loadScript(LIBS.jszip); await loadScript(LIBS.docx); await loadScript(LIBS.h2c);
+  const stage=document.createElement('div'); stage.className='stage'; document.body.append(stage);
+  try {
+    prog('レイアウトを計算中');
+    await docx.renderAsync(buf, stage, null, { className:'docx', inWrapper:false, breakPages:true,
+      ignoreLastRenderedPageBreak:false, renderHeaders:true, renderFooters:true, renderFootnotes:true,
+      useBase64URL:true, experimental:true });
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    await nextFrame();
+    const secs=[...stage.querySelectorAll('section.docx')];
+    if (!secs.length) throw new Error('本文が見つかりませんでした');
+    const pages=[];
+    for (let i=0;i<secs.length;i++){
+      prog(`${i+1} / ${secs.length} ページ`);
+      const sec=secs[i], rect=sec.getBoundingClientRect();
+      const pageHpx=parseFloat(getComputedStyle(sec).minHeight)||rect.height;
+      const scale=Math.min(2, 1800/rect.width);
+      const canvas=await html2canvas(sec, { scale, backgroundColor:'#ffffff', useCORS:true, logging:false, scrollX:0, scrollY:0,
+        windowWidth:Math.max(1200, Math.ceil(rect.width)+40),
+        onclone:(d)=>{ const s=d.querySelector('.stage'); if (s){ s.style.left='0px'; s.style.top='0px'; } } });
+      for (const c of sliceCanvas(canvas, Math.round(pageHpx*scale)))
+        pages.push({ canvas:c, wPt:rect.width*0.75, hPt:c.height/scale*0.75 });
+      await nextFrame();
+    }
+    return pages;
+  } finally { stage.remove(); }
+}
+
+/* ----- Excel ----- */
+async function renderXlsx(buf, prog){
+  await loadScript(LIBS.xlsx);
+  prog('ブックを読み込み中');
+  const wb=XLSX.read(buf, { type:'array', cellStyles:true, cellDates:true });
+  const hidden=new Set(((wb.Workbook&&wb.Workbook.Sheets)||[]).filter(s=>s.Hidden).map(s=>s.name));
+  const pages=[];
+  const mctx=document.createElement('canvas').getContext('2d');
+  const FONT='13px '+UI_FONT, BOLD='600 14px '+UI_FONT;
+  for (const name of wb.SheetNames){
+    if (hidden.has(name)) continue;
+    const ws=wb.Sheets[name]; if (!ws || !ws['!ref']) continue;
+    prog(`シート「${name}」`);
+    const R=XLSX.utils.decode_range(ws['!ref']);
+    let maxR=-1, maxC=-1;
+    for (const key in ws){ if (key[0]==='!') continue; const c=ws[key]; if (!c || c.v==null || c.v==='') continue;
+      const a=XLSX.utils.decode_cell(key); if (a.r>maxR) maxR=a.r; if (a.c>maxC) maxC=a.c; }
+    const merges=ws['!merges']||[];
+    for (const m of merges){ if (m.e.r>maxR) maxR=m.e.r; if (m.e.c>maxC) maxC=m.e.c; }
+    if (maxR<0) continue;
+    const r0=R.s.r, c0=R.s.c;
+    maxR=Math.min(maxR, r0+2999); maxC=Math.min(maxC, c0+79);
+    const cols=ws['!cols']||[], rows=ws['!rows']||[];
+    const colW=[], rowH=[];
+    for (let c=c0;c<=maxC;c++){ const o=cols[c]||{};
+      colW.push(o.hidden?0:(o.wpx || (o.wch!=null?o.wch*7+5:null) || (o.width!=null?o.width*7+5:null) || 64)); }
+    for (let r=r0;r<=maxR;r++){ const o=rows[r]||{};
+      rowH.push(o.hidden?0:(o.hpx || (o.hpt?o.hpt*4/3:null) || 20)); }
+    const colX=[0]; for (const w of colW) colX.push(colX[colX.length-1]+w);
+    const totalW=colX[colX.length-1];
+    const master=new Map(), covered=new Set();
+    for (const m of merges){
+      if (m.s.r>maxR || m.s.c>maxC) continue;
+      master.set(m.s.r+','+m.s.c, m);
+      for (let r=m.s.r;r<=m.e.r;r++) for (let c=m.s.c;c<=m.e.c;c++) if (r!==m.s.r || c!==m.s.c) covered.add(r+','+c);
+    }
+    const cellAt=(r,c)=>ws[XLSX.utils.encode_cell({r,c})];
+    const textOf=cell=>{ if (!cell || cell.v==null) return ''; if (cell.w!=null) return String(cell.w);
+      if (cell.v instanceof Date) return cell.v.toLocaleDateString('ja-JP'); return String(cell.v); };
+    const margin=28, head=30;
+    const pageW=Math.max(560, totalW+margin*2);
+    const portrait=pageW<1000;
+    const pageH=Math.round(pageW*(portrait?1.4142:0.7071));
+    // group rows into pages
+    const groups=[]; let curG=[], used=0;
+    for (let i=0;i<rowH.length;i++){
+      const avail=pageH-margin*2-(groups.length===0?head:0);
+      if (curG.length && used+rowH[i]>avail){ groups.push(curG); curG=[]; used=0; }
+      curG.push(i); used+=rowH[i];
+    }
+    if (curG.length) groups.push(curG);
+    const scale=Math.min(2, 2400/pageW);
+    groups.forEach((g, gi)=>{
+      const cv=document.createElement('canvas'); cv.width=Math.round(pageW*scale); cv.height=Math.round(pageH*scale);
+      const ctx=cv.getContext('2d'); ctx.scale(scale, scale);
+      ctx.fillStyle='#fff'; ctx.fillRect(0,0,pageW,pageH);
+      let top=margin;
+      ctx.fillStyle='#5b6474'; ctx.font=BOLD; ctx.textBaseline='middle';
+      ctx.fillText(groups.length>1 ? `${name}（${gi+1}/${groups.length}）` : name, margin, margin+ (gi===0?10:-12));
+      if (gi===0) top+=head;
+      const rowY={}; let yy=top; for (const i of g){ rowY[i]=yy; yy+=rowH[i]; }
+      const rowsBottom=yy;
+      const spanH=(i, n)=>{ let h=0; for (let k=i;k<i+n && k<rowH.length;k++) h+=rowH[k]; return h; };
+      // fills + grid
+      for (const i of g){ const r=r0+i; if (!rowH[i]) continue;
+        for (let j=0;j<colW.length;j++){ const c=c0+j; if (!colW[j]) continue;
+          if (covered.has(r+','+c)) continue;
+          const m=master.get(r+','+c);
+          const x=margin+colX[j], y=rowY[i];
+          const w= m ? colX[Math.min(m.e.c-c0+1, colW.length)]-colX[j] : colW[j];
+          const h= m ? Math.min(spanH(i, m.e.r-m.s.r+1), rowsBottom-y) : rowH[i];
+          const cell=cellAt(r,c), s=cell&&cell.s;
+          if (s && s.patternType==='solid' && s.fgColor && s.fgColor.rgb){ ctx.fillStyle='#'+String(s.fgColor.rgb).slice(-6); ctx.fillRect(x,y,w,h); }
+          ctx.strokeStyle='#d3d8df'; ctx.lineWidth=1; ctx.strokeRect(x+0.5,y+0.5,w,h);
+        } }
+      // text
+      ctx.font=FONT; ctx.textBaseline='middle';
+      for (const i of g){ const r=r0+i; if (!rowH[i]) continue;
+        for (let j=0;j<colW.length;j++){ const c=c0+j; if (!colW[j] || covered.has(r+','+c)) continue;
+          const cell=cellAt(r,c); const t=textOf(cell); if (!t) continue;
+          const m=master.get(r+','+c);
+          const x=margin+colX[j], y=rowY[i];
+          let w= m ? colX[Math.min(m.e.c-c0+1, colW.length)]-colX[j] : colW[j];
+          const h= m ? Math.min(spanH(i, m.e.r-m.s.r+1), rowsBottom-y) : rowH[i];
+          const al=cell.s&&cell.s.alignment&&cell.s.alignment.horizontal;
+          const align= al==='center'||al==='centerContinuous' ? 'center' : al==='right' ? 'right' : al==='left' ? 'left'
+                     : (cell.t==='n'||cell.t==='d') ? 'right' : cell.t==='b' ? 'center' : 'left';
+          const tw=mctx.measureText ? (ctx.measureText(t).width) : 0;
+          if (align==='left' && !m && tw>w-8){ // spill into empty neighbours like Excel
+            let k=j+1; while (k<colW.length && w<tw+8){ const nc=cellAt(r,c0+k); if (textOf(nc) || covered.has(r+','+(c0+k)) || master.has(r+','+(c0+k))) break; w+=colW[k]; k++; }
+          }
+          ctx.save(); ctx.beginPath(); ctx.rect(x+1,y,w-2,h); ctx.clip();
+          ctx.fillStyle = (cell.s&&cell.s.color&&cell.s.color.rgb) ? '#'+String(cell.s.color.rgb).slice(-6) : '#1d2129';
+          ctx.textAlign=align;
+          const tx= align==='left' ? x+4 : align==='right' ? x+w-4 : x+w/2;
+          ctx.fillText(t, tx, y+h/2+0.5);
+          ctx.restore();
+        } }
+      ctx.textAlign='left';
+      const wPt=portrait?595.28:841.89;
+      pages.push({ canvas:cv, wPt, hPt:wPt*pageH/pageW });
+    });
+  }
+  if (!pages.length) throw new Error('表示できるシートがありませんでした');
+  return pages;
+}
+
+/* ----- PowerPoint ----- */
+const EMU_PT=12700;
+function joinPath(dir, t){
+  if (!t) return null;
+  if (t[0]==='/') return t.slice(1);
+  const parts=dir ? dir.split('/') : [];
+  for (const seg of t.split('/')){ if (seg==='..') parts.pop(); else if (seg && seg!=='.') parts.push(seg); }
+  return parts.join('/');
+}
+const kid=(el,n)=>{ if (!el) return null; for (const c of el.children) if (c.nodeName===n) return c; return null; };
+const kids=(el,n)=>el ? [...el.children].filter(c=>c.nodeName===n) : [];
+const first=(el,n)=>el ? el.getElementsByTagName(n)[0]||null : null;
+function hexRgb(h){ h=String(h||'000000').replace('#',''); if (h.length===8) h=h.slice(2); const n=parseInt(h,16)||0; return [(n>>16)&255,(n>>8)&255,n&255]; }
+function rgb2hsl([r,g,b]){ r/=255; g/=255; b/=255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b); let h=0,s=0; const l=(mx+mn)/2;
+  if (mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    h = mx===r ? (g-b)/d+(g<b?6:0) : mx===g ? (b-r)/d+2 : (r-g)/d+4; h/=6; } return [h,s,l]; }
+function hsl2rgb(h,s,l){ if (!s) return [l*255,l*255,l*255];
+  const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q;
+  const f=t=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6) return p+(q-p)*6*t; if(t<1/2) return q; if(t<2/3) return p+(q-p)*(2/3-t)*6; return p; };
+  return [f(h+1/3)*255, f(h)*255, f(h-1/3)*255]; }
+
+async function renderPptx(buf, prog){
+  await loadScript(LIBS.jszip);
+  const zip=await JSZip.loadAsync(buf);
+  const xmlCache={}, relCache={}, imgCache={};
+  const xml=async p=>{ if (!p) return null; if (p in xmlCache) return xmlCache[p]; const f=zip.file(p);
+    xmlCache[p]= f ? new DOMParser().parseFromString(await f.async('string'),'application/xml') : null; return xmlCache[p]; };
+  const rels=async p=>{ if (!p) return {}; if (relCache[p]) return relCache[p];
+    const i=p.lastIndexOf('/'), dir=p.slice(0,i), name=p.slice(i+1);
+    const d=await xml(dir+'/_rels/'+name+'.rels'); const m={};
+    if (d) for (const r of d.getElementsByTagName('Relationship'))
+      m[r.getAttribute('Id')]={ type:r.getAttribute('Type')||'', target: r.getAttribute('TargetMode')==='External' ? null : joinPath(dir, r.getAttribute('Target')) };
+    return (relCache[p]=m); };
+  const relOfType=(m,t)=>Object.values(m).find(r=>r.type.endsWith('/'+t));
+  const MIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',bmp:'image/bmp',webp:'image/webp',svg:'image/svg+xml'};
+  const loadImg=async path=>{
+    if (path in imgCache) return imgCache[path];
+    const ext=(path.split('.').pop()||'').toLowerCase(); const f=zip.file(path);
+    if (!f || !MIME[ext]){ imgCache[path]=null; return null; }
+    const blob=new Blob([await f.async('arraybuffer')], { type:MIME[ext] });
+    const url=URL.createObjectURL(blob);
+    imgCache[path]=await new Promise(res=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=url; });
+    return imgCache[path];
+  };
+
+  const pres=await xml('ppt/presentation.xml'); if (!pres) throw new Error('PowerPointファイルの形式を読み取れませんでした');
+  const sz=first(pres,'p:sldSz');
+  const SX=+(sz&&sz.getAttribute('cx'))||12192000, SY=+(sz&&sz.getAttribute('cy'))||6858000;
+  const prels=await rels('ppt/presentation.xml');
+  const slidePaths=[...pres.getElementsByTagName('p:sldId')].map(e=>prels[e.getAttribute('r:id')]).filter(r=>r&&r.target).map(r=>r.target);
+  if (!slidePaths.length) throw new Error('スライドが見つかりませんでした');
+  const presDefault=first(pres,'p:defaultTextStyle');
+  const W=1920, k=W/SX, H=Math.round(SY*k);
+  const pages=[];
+
+  for (let si=0; si<slidePaths.length; si++){
+    prog(`${si+1} / ${slidePaths.length} 枚目`);
+    const sPath=slidePaths[si], sDoc=await xml(sPath), sRels=await rels(sPath);
+    if (!sDoc) continue;
+    const lPath=(relOfType(sRels,'slideLayout')||{}).target, lDoc=await xml(lPath), lRels=await rels(lPath);
+    const mPath=(relOfType(lRels,'slideMaster')||{}).target, mDoc=await xml(mPath), mRels=await rels(mPath);
+    const tPath=(relOfType(mRels,'theme')||{}).target, tDoc=await xml(tPath);
+
+    const theme={};
+    const cs=first(tDoc,'a:clrScheme');
+    if (cs) for (const c of cs.children){ const v=c.firstElementChild; const n=c.nodeName.replace(/^a:/,'');
+      theme[n]= !v ? '000000' : v.nodeName==='a:srgbClr' ? v.getAttribute('val') : (v.getAttribute('lastClr')||'000000'); }
+    const clrMap={ bg1:'lt1', tx1:'dk1', bg2:'lt2', tx2:'dk2' };
+    const cm=first(mDoc,'p:clrMap'); if (cm) for (const a of cm.attributes) clrMap[a.name]=a.value;
+    const colEl=el=>{ if (!el) return null; for (const ch of el.children) if (/^a:(srgbClr|schemeClr|sysClr|prstClr|scrgbClr)$/.test(ch.nodeName)) return ch; return null; };
+    const col=parent=>{
+      const c=colEl(parent); if (!c) return null;
+      const v=c.getAttribute('val'); let hex='000000';
+      if (c.nodeName==='a:srgbClr') hex=v;
+      else if (c.nodeName==='a:schemeClr') hex=theme[clrMap[v]||v]||theme[v]||'000000';
+      else if (c.nodeName==='a:sysClr') hex=c.getAttribute('lastClr')||(v==='window'?'FFFFFF':'000000');
+      else if (c.nodeName==='a:prstClr') hex=({white:'FFFFFF',black:'000000',red:'FF0000',blue:'0000FF',green:'008000',yellow:'FFFF00',gray:'808080'})[v]||'000000';
+      let rgb=hexRgb(hex), a=1;
+      for (const m of c.children){ const val=(+m.getAttribute('val'))/100000;
+        if (m.nodeName==='a:lumMod'){ const [h,s,l]=rgb2hsl(rgb); rgb=hsl2rgb(h,s,Math.min(1,l*val)); }
+        else if (m.nodeName==='a:lumOff'){ const [h,s,l]=rgb2hsl(rgb); rgb=hsl2rgb(h,s,Math.min(1,l+val)); }
+        else if (m.nodeName==='a:tint') rgb=rgb.map(x=>x+(255-x)*(1-val));
+        else if (m.nodeName==='a:shade') rgb=rgb.map(x=>x*val);
+        else if (m.nodeName==='a:alpha') a=val; }
+      return `rgba(${rgb.map(x=>Math.round(Math.max(0,Math.min(255,x)))).join(',')},${a})`;
+    };
+    const defText=()=>col({ children:[{ nodeName:'a:schemeClr', getAttribute:()=> 'tx1', children:[] }] }) || '#000';
+    const txStyles=first(mDoc,'p:txStyles');
+    const TS={ title:kid(txStyles,'p:titleStyle'), body:kid(txStyles,'p:bodyStyle'), other:kid(txStyles,'p:otherStyle') };
+
+    const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+    const parts={ slide:{doc:sDoc, rels:sRels, kind:'slide'}, layout:{doc:lDoc, rels:lRels, kind:'layout'}, master:{doc:mDoc, rels:mRels, kind:'master'} };
+
+    const fillOf=(spPr, style)=>{
+      if (spPr){
+        if (kid(spPr,'a:noFill')) return 'none';
+        const sf=kid(spPr,'a:solidFill'); if (sf) return col(sf);
+        const gf=kid(spPr,'a:gradFill'); if (gf){ const gs=first(gf,'a:gs'); if (gs) return col(gs); }
+        const bf=kid(spPr,'a:blipFill'); if (bf) return { blip:bf };
+      }
+      if (style){ const fr=kid(style,'a:fillRef'); if (fr && +fr.getAttribute('idx')>0) return col(fr); }
+      return null;
+    };
+    const lineOf=(spPr, style)=>{
+      const ln=spPr && kid(spPr,'a:ln');
+      if (ln){ if (kid(ln,'a:noFill')) return null;
+        let c=col(kid(ln,'a:solidFill')); const w=+ln.getAttribute('w')||12700;
+        if (!c && style){ const lr=kid(style,'a:lnRef'); if (lr && +lr.getAttribute('idx')>0) c=col(lr); }
+        return c ? { c, w } : null; }
+      if (style){ const lr=kid(style,'a:lnRef'); if (lr && +lr.getAttribute('idx')>0){ const c=col(lr); if (c) return { c, w:12700 }; } }
+      return null;
+    };
+    const xfrmOf=(container, name='a:xfrm')=>{
+      const xf=container && kid(container, name); if (!xf) return null;
+      const off=kid(xf,'a:off'), ext=kid(xf,'a:ext'); if (!off || !ext) return null;
+      return { x:+off.getAttribute('x'), y:+off.getAttribute('y'), w:+ext.getAttribute('cx'), h:+ext.getAttribute('cy'),
+        rot:+(xf.getAttribute('rot')||0), fh:xf.getAttribute('flipH')==='1', fv:xf.getAttribute('flipV')==='1' };
+    };
+    const phOf=el=>{ const nv=el.firstElementChild; const nvPr=nv && kid(nv,'p:nvPr'); return nvPr ? kid(nvPr,'p:ph') : null; };
+    const findPh=(doc, ph, byTypeOnly)=>{
+      if (!doc) return null;
+      const type=ph.getAttribute('type')||'body', idx=ph.getAttribute('idx');
+      const norm=t=>({ ctrTitle:'title', subTitle:'body', obj:'body' })[t]||t;
+      let byType=null;
+      for (const sp of doc.getElementsByTagName('p:sp')){ const q=phOf(sp); if (!q) continue;
+        if (!byTypeOnly && idx!=null && q.getAttribute('idx')===idx) return sp;
+        const qt=q.getAttribute('type')||'body';
+        if (!byType && (qt===type || (byTypeOnly && norm(qt)===norm(type)))) byType=sp; }
+      return byType;
+    };
+    const inherit=ph=>{ const lSp=findPh(lDoc, ph, false); const mSp=findPh(mDoc, lSp ? (phOf(lSp)||ph) : ph, true); return { lSp, mSp }; };
+
+    const withRect=(r, fn)=>{
+      const x=r.x*k, y=r.y*k, w=r.w*k, h=r.h*k;
+      ctx.save();
+      if (r.rot){ ctx.translate(x+w/2, y+h/2); ctx.rotate(r.rot/60000*Math.PI/180); ctx.translate(-(x+w/2), -(y+h/2)); }
+      fn(x,y,w,h); ctx.restore();
+    };
+    const shapePath=(prst,x,y,w,h)=>{
+      ctx.beginPath();
+      if (prst==='ellipse'){ ctx.ellipse(x+w/2,y+h/2,Math.abs(w/2),Math.abs(h/2),0,0,Math.PI*2); }
+      else if (prst==='roundRect' && ctx.roundRect){ ctx.roundRect(x,y,w,h,Math.min(w,h)*0.1667); }
+      else if (prst==='triangle'){ ctx.moveTo(x+w/2,y); ctx.lineTo(x+w,y+h); ctx.lineTo(x,y+h); ctx.closePath(); }
+      else if (prst==='diamond'){ ctx.moveTo(x+w/2,y); ctx.lineTo(x+w,y+h/2); ctx.lineTo(x+w/2,y+h); ctx.lineTo(x,y+h/2); ctx.closePath(); }
+      else if (prst==='rightArrow'){ const t=h*0.25, hw=Math.min(w*0.45,h*0.6); ctx.moveTo(x,y+t); ctx.lineTo(x+w-hw,y+t); ctx.lineTo(x+w-hw,y); ctx.lineTo(x+w,y+h/2); ctx.lineTo(x+w-hw,y+h); ctx.lineTo(x+w-hw,y+h-t); ctx.lineTo(x,y+h-t); ctx.closePath(); }
+      else if (prst==='leftArrow'){ const t=h*0.25, hw=Math.min(w*0.45,h*0.6); ctx.moveTo(x+w,y+t); ctx.lineTo(x+hw,y+t); ctx.lineTo(x+hw,y); ctx.lineTo(x,y+h/2); ctx.lineTo(x+hw,y+h); ctx.lineTo(x+hw,y+h-t); ctx.lineTo(x+w,y+h-t); ctx.closePath(); }
+      else ctx.rect(x,y,w,h);
+    };
+    const drawBlip=async(bf, r, rl)=>{
+      const blip=kid(bf,'a:blip'); const id=blip && blip.getAttribute('r:embed'); const rel=id && rl[id];
+      if (!rel || !rel.target) return;
+      const img=await loadImg(rel.target); if (!img) return;
+      const sr=kid(bf,'a:srcRect'); let sx=0, sy=0, sw=img.naturalWidth, sh=img.naturalHeight;
+      if (sr){ const g=a=>(+(sr.getAttribute(a)||0))/100000;
+        sx=sw*g('l'); sy=sh*g('t'); const w2=sw*(1-g('l')-g('r')), h2=sh*(1-g('t')-g('b')); sw=w2; sh=h2; }
+      withRect(r,(x,y,w,h)=>{ if (sw>0 && sh>0) ctx.drawImage(img,sx,sy,sw,sh,x,y,w,h); });
+    };
+
+    // ---- text ----
+    const lvlProp=(chain, lvl, fn)=>{ for (const lst of chain){ if (!lst) continue; const lp=kid(lst,`a:lvl${lvl+1}pPr`); if (!lp) continue; const v=fn(lp); if (v!=null) return v; } return null; };
+    const drawText=(tx, r, o)=>{
+      if (!tx) return;
+      const chain=o.chain, bodies=[kid(tx,'a:bodyPr'), ...(o.bodies||[])];
+      const battr=(n)=>{ for (const b of bodies){ if (b && b.getAttribute(n)!=null) return b.getAttribute(n); } return null; };
+      const ins=(n,d)=>{ const v=battr(n); return v!=null ? +v : (o.insets&&o.insets[n]!=null ? o.insets[n] : d); };
+      const lI=ins('lIns',91440), rI=ins('rIns',91440), tI=ins('tIns',45720), bI=ins('bIns',45720);
+      const anchor=battr('anchor')||'t';
+      const af=first(kid(tx,'a:bodyPr'),'a:normAutofit');
+      const fscale=af && af.getAttribute('fontScale') ? (+af.getAttribute('fontScale'))/100000 : 1;
+      const lnRed=af && af.getAttribute('lnSpcReduction') ? (+af.getAttribute('lnSpcReduction'))/100000 : 0;
+      const wrapNone=battr('wrap')==='none';
+      const availW=Math.max(4, (r.w-lI-rI)*k);
+      const runStyle=(rPr, lvl)=>{
+        const d=lvlProp(chain,lvl,lp=>kid(lp,'a:defRPr'));
+        const pick=n=>{ if (rPr && rPr.getAttribute(n)!=null) return rPr.getAttribute(n); const v=lvlProp(chain,lvl,lp=>{ const dr=kid(lp,'a:defRPr'); return dr && dr.getAttribute(n); }); return v; };
+        const sz=+(pick('sz')||o.defSz||1800);
+        const lvlCol=ch=>lvlProp(ch,lvl,lp=>{ const dr=kid(lp,'a:defRPr'); return dr ? col(kid(dr,'a:solidFill')) : null; });
+        let color=rPr && col(kid(rPr,'a:solidFill'));
+        if (!color) color=lvlCol(chain.slice(0,1));
+        if (!color && o.styleColor) color=o.styleColor;
+        if (!color) color=lvlCol(chain.slice(1));
+        if (!color) color=o.defColor || defText();
+        const px=sz/100*EMU_PT*k*fscale;
+        return { px, b:pick('b')==='1' || (!!o.bold && pick('b')!=='0'), i:pick('i')==='1', color, u:rPr && rPr.getAttribute('u') && rPr.getAttribute('u')!=='none' };
+      };
+      const fontOf=s=>`${s.i?'italic ':''}${s.b?'700':'400'} ${s.px}px ${UI_FONT}`;
+      const TOK=/\s+|[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]|[^\s\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]+/g;
+      const lines=[];
+      let firstPara=true;
+      for (const p of kids(tx,'a:p')){
+        const pPr=kid(p,'a:pPr'); const lvl=pPr ? +(pPr.getAttribute('lvl')||0) : 0;
+        const pa=n=>{ if (pPr && pPr.getAttribute(n)!=null) return pPr.getAttribute(n); return lvlProp(chain,lvl,lp=>lp.getAttribute(n)); };
+        const algn=pa('algn')||'l';
+        const marL=(+(pa('marL')||0))*k, indent=(+(pa('indent')||0))*k;
+        let bullet=null;
+        if (o.bullets){
+          const bsrc=(pPr && (kid(pPr,'a:buNone')||kid(pPr,'a:buChar')||kid(pPr,'a:buAutoNum'))) || lvlProp(chain,lvl,lp=>kid(lp,'a:buNone')||kid(lp,'a:buChar')||kid(lp,'a:buAutoNum'));
+          if (bsrc && bsrc.nodeName==='a:buChar') bullet=bsrc.getAttribute('char')||'•';
+          else if (bsrc && bsrc.nodeName==='a:buAutoNum') bullet='•';
+        } else if (pPr){ const bc=kid(pPr,'a:buChar'); if (bc) bullet=bc.getAttribute('char')||'•'; }
+        const spcBefEl=(pPr && kid(pPr,'a:spcBef')) || lvlProp(chain,lvl,lp=>kid(lp,'a:spcBef'));
+        const lnSpcEl=(pPr && kid(pPr,'a:lnSpc')) || lvlProp(chain,lvl,lp=>kid(lp,'a:lnSpc'));
+        const lnPct=lnSpcEl && kid(lnSpcEl,'a:spcPct') ? (+kid(lnSpcEl,'a:spcPct').getAttribute('val'))/100000 : 1;
+        const endSt=runStyle(kid(p,'a:endParaRPr'), lvl);
+        const runs=[];
+        for (const ch of p.children){
+          if (ch.nodeName==='a:r' || ch.nodeName==='a:fld'){ const t=(kid(ch,'a:t')||{}).textContent||''; if (t) runs.push({ t, st:runStyle(kid(ch,'a:rPr'),lvl) }); }
+          else if (ch.nodeName==='a:br') runs.push({ br:true });
+        }
+        let spcBef=0;
+        if (!firstPara && spcBefEl){ const pts=kid(spcBefEl,'a:spcPts'), pct=kid(spcBefEl,'a:spcPct');
+          if (pts) spcBef=(+pts.getAttribute('val'))/100*EMU_PT*k*fscale; else if (pct) spcBef=(+pct.getAttribute('val'))/100000*endSt.px; }
+        firstPara=false;
+        const hasText=runs.some(x=>x.t && x.t.trim());
+        const lnMul=Math.max(0.6, 1.2*lnPct - lnRed);
+        let line={ items:[], w:0, max:0, start:marL+(bullet&&hasText?0:indent), spcBef, algn, lnMul, bullet: bullet&&hasText ? { ch:bullet, x:marL+indent } : null };
+        const push=()=>{ if (!line.max) line.max=endSt.px; lines.push(line); line={ items:[], w:0, max:0, start:marL, spcBef:0, algn, lnMul, bullet:null }; };
+        for (const run of runs){
+          if (run.br){ push(); continue; }
+          ctx.font=fontOf(run.st);
+          for (const tok of run.t.match(TOK)||[]){
+            let tw=ctx.measureText(tok).width;
+            const space=/^\s+$/.test(tok);
+            if (!wrapNone && line.items.length && line.start+line.w+tw>availW && !space){ push(); }
+            if (space && !line.items.length) continue;
+            if (!wrapNone && tw>availW-line.start && !space){ // break long word
+              let buf='';
+              for (const chh of tok){ const t2=buf+chh; if (line.start+line.w+ctx.measureText(t2).width>availW && buf){ line.items.push({ t:buf, st:run.st, w:ctx.measureText(buf).width }); line.w+=ctx.measureText(buf).width; line.max=Math.max(line.max,run.st.px); push(); buf=chh; } else buf=t2; }
+              if (buf){ tw=ctx.measureText(buf).width; line.items.push({ t:buf, st:run.st, w:tw }); line.w+=tw; line.max=Math.max(line.max,run.st.px); }
+              continue;
+            }
+            line.items.push({ t:tok, st:run.st, w:tw }); line.w+=tw; line.max=Math.max(line.max, run.st.px);
+          }
+        }
+        push();
+      }
+      // trim trailing spaces width
+      for (const ln of lines){ while (ln.items.length && /^\s+$/.test(ln.items[ln.items.length-1].t)){ ln.w-=ln.items.pop().w; } }
+      const totalH=lines.reduce((a,ln)=>a+ln.spcBef+ln.max*ln.lnMul, 0);
+      withRect(r,(x,y,w,h)=>{
+        const innerTop=y+tI*k, innerH=h-(tI+bI)*k, left=x+lI*k;
+        let cy= anchor==='ctr' ? innerTop+(innerH-totalH)/2 : anchor==='b' ? innerTop+innerH-totalH : innerTop;
+        ctx.textBaseline='alphabetic';
+        for (const ln of lines){
+          cy+=ln.spcBef;
+          const lh=ln.max*ln.lnMul, base=cy+(lh-ln.max)/2+ln.max*0.86;
+          let lx= ln.algn==='ctr' ? left+ln.start+(availW-ln.start-ln.w)/2 : ln.algn==='r' ? left+availW-ln.w : left+ln.start;
+          if (ln.bullet && ln.items.length){ const s=ln.items[0].st; ctx.font=fontOf(s); ctx.fillStyle=s.color; ctx.fillText(ln.bullet.ch, left+ln.bullet.x, base); }
+          for (const it of ln.items){
+            ctx.font=fontOf(it.st); ctx.fillStyle=it.st.color; ctx.fillText(it.t, lx, base);
+            if (it.st.u){ ctx.fillRect(lx, base+it.st.px*0.12, it.w, Math.max(1,it.st.px*0.06)); }
+            lx+=it.w;
+          }
+          cy+=lh;
+        }
+      });
+    };
+    const txOpts=(el, ph, inh)=>{
+      const own=kid(kid(el,'p:txBody'),'a:lstStyle');
+      const lst=sp=>sp ? kid(kid(sp,'p:txBody'),'a:lstStyle') : null;
+      const body=sp=>sp ? kid(kid(sp,'p:txBody'),'a:bodyPr') : null;
+      if (!ph) return { chain:[own, TS.other, presDefault], bodies:[], bullets:false, defSz:1800 };
+      const type=ph.getAttribute('type')||'body';
+      const isTitle=type==='title'||type==='ctrTitle';
+      const isBody=['body','obj','subTitle'].includes(type) || !ph.getAttribute('type');
+      const ms= isTitle ? TS.title : isBody ? TS.body : TS.other;
+      return { chain:[own, lst(inh.lSp), lst(inh.mSp), ms, presDefault], bodies:[body(inh.lSp), body(inh.mSp)],
+               bullets:isBody && type!=='subTitle', defSz:isTitle?4400:1800 };
+    };
+
+    const drawSp=async(el, T, part)=>{
+      const ph=phOf(el); if (ph && part.kind!=='slide') return;
+      const spPr=kid(el,'p:spPr'), style=kid(el,'p:style');
+      const inh= ph ? inherit(ph) : {};
+      const xf=xfrmOf(spPr) || (inh.lSp && xfrmOf(kid(inh.lSp,'p:spPr'))) || (inh.mSp && xfrmOf(kid(inh.mSp,'p:spPr')));
+      if (!xf) return;
+      const r=T(xf);
+      const geom=spPr && kid(spPr,'a:prstGeom'); const prst=geom ? geom.getAttribute('prst') : (spPr && kid(spPr,'a:custGeom') ? 'rect' : 'rect');
+      const fill=fillOf(spPr, style), ln=lineOf(spPr, style);
+      const isLine=el.nodeName==='p:cxnSp' || prst==='line' || /Connector/.test(prst);
+      withRect(r,(x,y,w,h)=>{
+        if (isLine){ if (ln){ ctx.strokeStyle=ln.c; ctx.lineWidth=Math.max(1, ln.w*k); ctx.beginPath();
+            ctx.moveTo(r.fh?x+w:x, r.fv?y+h:y); ctx.lineTo(r.fh?x:x+w, r.fv?y:y+h); ctx.stroke(); } return; }
+        shapePath(prst,x,y,w,h);
+        if (typeof fill==='string' && fill!=='none'){ ctx.fillStyle=fill; ctx.fill(); }
+        if (ln){ ctx.strokeStyle=ln.c; ctx.lineWidth=Math.max(1, ln.w*k); ctx.stroke(); }
+      });
+      if (fill && fill.blip) await drawBlip(fill.blip, r, part.rels);
+      const tx=kid(el,'p:txBody');
+      if (tx && !isLine){ const o=txOpts(el, ph, inh); const fc=style && kid(style,'a:fontRef'); const c=fc && col(fc); if (c) o.styleColor=c; drawText(tx, r, o); }
+    };
+    const drawPic=async(el, T, part)=>{
+      const ph=phOf(el); if (ph && part.kind!=='slide') return;
+      const spPr=kid(el,'p:spPr'); const inh= ph ? inherit(ph) : {};
+      const xf=xfrmOf(spPr) || (inh.lSp && xfrmOf(kid(inh.lSp,'p:spPr')));
+      const bf=kid(el,'p:blipFill'); if (!xf || !bf) return;
+      await drawBlip(bf, T(xf), part.rels);
+    };
+    const drawTable=(tbl, r)=>{
+      const grid=first(tbl,'a:tblGrid'); if (!grid) return;
+      const cols=kids(grid,'a:gridCol').map(c=>+c.getAttribute('w'));
+      const trs=kids(tbl,'a:tr'); const rh=trs.map(t=>+t.getAttribute('h'));
+      const tPr=kid(tbl,'a:tblPr'); const firstRow=tPr && tPr.getAttribute('firstRow')==='1'; const bandRow=tPr && tPr.getAttribute('bandRow')==='1';
+      let y=r.y;
+      trs.forEach((tr,ri)=>{
+        let x=r.x, ci=0;
+        for (const tc of kids(tr,'a:tc')){
+          const span=+(tc.getAttribute('gridSpan')||1), rs=+(tc.getAttribute('rowSpan')||1);
+          let w=0; for (let q=ci;q<ci+span && q<cols.length;q++) w+=cols[q];
+          let h=0; for (let q=ri;q<ri+rs && q<rh.length;q++) h+=rh[q];
+          if (tc.getAttribute('hMerge')!=='1' && tc.getAttribute('vMerge')!=='1'){
+            const cell={ x, y, w, h, rot:0 };
+            const tcPr=kid(tc,'a:tcPr');
+            let f=tcPr ? fillOf(tcPr, null) : null;
+            const accent=(mods)=>col({ children:[{ nodeName:'a:schemeClr', getAttribute:()=>'accent1', children:mods }] });
+            if (!f && firstRow && ri===0) f=accent([]);
+            else if (!f && bandRow && (ri-(firstRow?1:0))%2===0) f=accent([{ nodeName:'a:tint', getAttribute:()=>'40000' }]);
+            else if (!f && bandRow) f=accent([{ nodeName:'a:tint', getAttribute:()=>'20000' }]);
+            withRect(cell,(cx,cy,cw,chh)=>{
+              if (typeof f==='string' && f!=='none'){ ctx.fillStyle=f; ctx.fillRect(cx,cy,cw,chh); }
+              ctx.strokeStyle='rgba(120,128,140,.7)'; ctx.lineWidth=1.5; ctx.strokeRect(cx,cy,cw,chh);
+            });
+            const ins={}; if (tcPr) for (const [a,b] of [['marL','lIns'],['marR','rIns'],['marT','tIns'],['marB','bIns']]) if (tcPr.getAttribute(a)!=null) ins[b]=+tcPr.getAttribute(a);
+            const anc=tcPr && tcPr.getAttribute('anchor');
+            const o={ chain:[null, TS.other, presDefault], bodies: anc ? [{ getAttribute:n=>n==='anchor'?anc:null }] : [], bullets:false, defSz:1800, insets:ins };
+            if (firstRow && ri===0){ o.styleColor='#ffffff'; o.bold=true; }
+            drawText(kid(tc,'a:txBody'), cell, o);
+          }
+          x+=w; ci+=span;
+        }
+        y+=rh[ri];
+      });
+    };
+    const drawFrame=async(el, T, part)=>{
+      const ph=phOf(el); if (ph && part.kind!=='slide') return;
+      const xf=xfrmOf(el,'p:xfrm'); if (!xf) return;
+      const r=T(xf);
+      const tbl=first(el,'a:tbl');
+      if (tbl){ drawTable(tbl, r); return; }
+      withRect(r,(x,y,w,h)=>{
+        ctx.fillStyle='rgba(120,130,150,.08)'; ctx.fillRect(x,y,w,h);
+        ctx.strokeStyle='rgba(120,130,150,.55)'; ctx.lineWidth=2; ctx.setLineDash([10,8]); ctx.strokeRect(x,y,w,h); ctx.setLineDash([]);
+        ctx.fillStyle='#6b7280'; ctx.font=`500 26px ${UI_FONT}`; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText('グラフ・図（この形式は表示できません）', x+w/2, y+h/2); ctx.textAlign='left';
+      });
+    };
+    const drawTree=async(tree, T, part)=>{
+      if (!tree) return;
+      for (const el of tree.children){
+        const n=el.nodeName;
+        if (n==='p:sp' || n==='p:cxnSp') await drawSp(el,T,part);
+        else if (n==='p:pic') await drawPic(el,T,part);
+        else if (n==='p:graphicFrame') await drawFrame(el,T,part);
+        else if (n==='mc:AlternateContent'){ const fb=kid(el,'mc:Fallback'); const ch=kid(el,'mc:Choice'); await drawTree(fb||ch,T,part); }
+        else if (n==='p:grpSp'){
+          const gp=kid(el,'p:grpSpPr'), xf=gp && kid(gp,'a:xfrm'); let T2=T;
+          if (xf){ const off=kid(xf,'a:off'), ext=kid(xf,'a:ext'), co=kid(xf,'a:chOff'), ce=kid(xf,'a:chExt');
+            if (off && ext && co && ce){
+              const ox=+off.getAttribute('x'), oy=+off.getAttribute('y'), ex=+ext.getAttribute('cx'), ey=+ext.getAttribute('cy');
+              const cx=+co.getAttribute('x'), cy=+co.getAttribute('y'), cex=+ce.getAttribute('cx')||1, cey=+ce.getAttribute('cy')||1;
+              const sx=ex/cex, sy=ey/cey;
+              T2=rr=>T({ x:ox+(rr.x-cx)*sx, y:oy+(rr.y-cy)*sy, w:rr.w*sx, h:rr.h*sy, rot:rr.rot, fh:rr.fh, fv:rr.fv });
+            } }
+          await drawTree(el,T2,part);
+        }
+      }
+    };
+    // background
+    const bgOf=async part=>{
+      const bg=first(part.doc,'p:bg'); if (!bg) return false;
+      const pr=kid(bg,'p:bgPr');
+      if (pr){ const f=fillOf(pr,null);
+        if (typeof f==='string' && f!=='none'){ ctx.fillStyle=f; ctx.fillRect(0,0,W,H); return true; }
+        if (f && f.blip){ await drawBlip(f.blip, { x:0, y:0, w:SX, h:SY, rot:0 }, part.rels); return true; } }
+      const ref=kid(bg,'p:bgRef'); if (ref){ const c=col(ref); if (c){ ctx.fillStyle=c; ctx.fillRect(0,0,W,H); return true; } }
+      return false;
+    };
+    if (!(await bgOf(parts.slide))) if (!(lDoc && await bgOf(parts.layout))) if (mDoc) await bgOf(parts.master);
+    const id=rr=>rr;
+    const showMaster=el=>!el || el.documentElement.getAttribute('showMasterSp')!=='0';
+    if (mDoc && showMaster(lDoc) && showMaster(sDoc)) await drawTree(first(mDoc,'p:spTree'), id, parts.master);
+    if (lDoc && showMaster(sDoc)) await drawTree(first(lDoc,'p:spTree'), id, parts.layout);
+    await drawTree(first(sDoc,'p:spTree'), id, parts.slide);
+    pages.push({ canvas:cv, wPt:SX/EMU_PT, hPt:SY/EMU_PT });
+    await nextFrame();
+  }
+  for (const k2 in imgCache){ const im=imgCache[k2]; if (im && im.src) URL.revokeObjectURL(im.src); }
+  return pages;
+}
+
+async function importOffice(file){
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  const kind=OFFICE_EXT[ext];
+  const say=(m)=>toast(`${kind}を変換中… ${m}`, 60000);
+  say('');
+  const buf=await file.arrayBuffer();
+  let pages, fmt='png';
+  if (kind==='Word') pages=await renderDocx(buf, say);
+  else if (kind==='Excel') pages=await renderXlsx(ext==='csv' ? new Uint8Array(buf) : buf, say);
+  else { pages=await renderPptx(buf, say); fmt='jpg'; }
+  const bytes=await pagesToPdf(pages, fmt, (i,n)=>say(`PDFを作成 ${i} / ${n}`));
+  await openDoc(bytes, file.name, null);
+  await saveBytes(); scheduleSave(0);
+  toast(`${kind}を${D.pages.length}ページのノートとして開きました`);
+}
 
 /* ---------- sample document ---------- */
 function ellipsePts(cx,cy,rx,ry,turn=1.08){ const out=[]; const n=70;
