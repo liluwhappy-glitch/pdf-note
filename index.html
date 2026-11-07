@@ -2927,7 +2927,7 @@ async function scNextImage(){
   if (SC.pages.length) scShowBetween(); else scClose();
 }
 function scOpenUI(){ scEl('scan').hidden=false; scEl('scandlg').hidden=true; document.getElementById('imgdlg').hidden=true; }
-function scClose(){ scEl('scan').hidden=true; SC.pages=[]; SC.queue=[]; SC.src=SC.base=SC.prev=null; }
+function scClose(){ scEl('scan').hidden=true; SC.pages=[]; SC.queue=[]; SC.src=SC.base=SC.prev=null; SC.step=''; scDrag=null; scEl('sc-next').disabled=false; scEl('sc-th').innerHTML=''; }
 async function scFinish(){
   if (!SC.pages.length) return;
   if (SC.mode==='insert' || SC.mode==='trim'){ scEl('sc-next').disabled=true; return scInsert(); }
@@ -2948,6 +2948,7 @@ scEl('sc-x').onclick=()=>{ scEl('scandlg').hidden=true; };
 scEl('scandlg').addEventListener('pointerdown', e=>{ if (e.target===scEl('scandlg')) scEl('scandlg').hidden=true; });
 for (const id of ['sc-cam','sc-lib']) scEl(id).addEventListener('change', async e=>{
   const fs=[...(e.target.files||[])]; e.target.value=''; if (!fs.length) return;
+  if (scEl('scan').hidden){ SC.queue=[]; SC.pages=[]; SC.src=SC.base=SC.prev=null; SC.step=''; }   // 前回の状態を残さず、毎回あたらしく始める
   scOpenUI(); SC.queue.push(...fs); if (SC.step!=='crop' && SC.step!=='fin') scNextImage();
 });
 scEl('sc-cancel').onclick=()=>{ if (SC.pages.length && !confirm('撮影した内容を破棄しますか？')) return; scClose(); };
