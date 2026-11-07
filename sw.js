@@ -1,5 +1,5 @@
 // オフラインでも起動できるよう、アプリ本体とライブラリをキャッシュする
-const VERSION = 'pdfnote-v5';
+const VERSION = 'pdfnote-v6';
 const CORE = ['./', './index.html', './manifest.webmanifest', './apple-touch-icon.png',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-32.png'];
 const CDN = ['https://cdnjs.cloudflare.com/', 'https://cdn.jsdelivr.net/', 'https://fonts.googleapis.com/', 'https://fonts.gstatic.com/'];

@@ -42,24 +42,19 @@ body{height:100%;margin:0;background:var(--desk);color:var(--ink);font-family:va
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 button,label.btn{font:inherit;color:inherit}
 
-.bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;
+.bar{display:flex;align-items:center;gap:8px;
   background:var(--bar);border-bottom:1px solid var(--line);
   padding-top:calc(8px + env(safe-area-inset-top,0px));padding-bottom:8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
-  position:relative;z-index:5}
-.grp{display:flex;align-items:center;gap:4px;min-width:0}
-.file{flex:1 1 0}
-.acts{flex:1 1 0;justify-content:flex-end}
-.tools{gap:10px}
-@media (max-width:1060px){
-  .tools{order:3;flex-basis:100%;justify-content:center;border-top:1px solid var(--line);padding-top:8px}
-}
-.docname{font-weight:500;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-left:6px;min-width:0}
+  position:relative;z-index:6}
+.grp{display:flex;align-items:center;gap:4px;min-width:0;flex:none}
+.docname{flex:1;min-width:0;text-align:center;font-weight:600;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.work{flex:1;min-height:0;position:relative;overflow:hidden}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;min-width:38px;padding:0 10px;
   border:0;border-radius:9px;background:transparent;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap}
 .btn:hover{background:var(--hover)}
-.btn:focus-visible,.tool:focus-visible,.sw:focus-visible,.sz:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.btn svg,.tool svg{width:20px;height:20px;flex:none}
+.btn:focus-visible,.tb:focus-visible,.sw:focus-visible,.sz:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn svg{width:20px;height:20px;flex:none}
 .btn[disabled]{opacity:.35;cursor:default}
 .btn[disabled]:hover{background:transparent}
 .btn.primary{background:var(--accent);color:#fff;padding:0 14px}
@@ -69,19 +64,44 @@ button,label.btn{font:inherit;color:inherit}
 .btn.toggle[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
 .sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none}
 
-.seg{display:flex;gap:2px;background:var(--hover);border-radius:11px;padding:3px}
-.tool{width:42px;height:36px;border:0;border-radius:8px;background:transparent;display:grid;place-items:center;cursor:pointer;color:var(--muted)}
-.tool[aria-pressed="true"]{background:var(--bar);color:var(--accent);box-shadow:0 1px 3px rgba(18,28,48,.18)}
-.swatches,.sizes{display:flex;align-items:center;gap:4px;min-height:36px}
-.sw{width:30px;height:30px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center;cursor:pointer;padding:0}
-.sw::before{content:"";width:20px;height:20px;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)}
+/* floating toolbar (docks top / left / right) */
+#toolbar{position:absolute;z-index:5;display:flex;align-items:center;gap:2px;background:var(--bar);border:1px solid var(--line);
+  border-radius:18px;box-shadow:var(--shadow);padding:4px;touch-action:manipulation}
+body[data-dock="top"] #toolbar{top:10px;left:50%;transform:translateX(-50%);max-width:calc(100% - 24px);overflow-x:auto;scrollbar-width:none}
+body[data-dock="left"] #toolbar{top:50%;left:max(10px,calc(env(safe-area-inset-left,0px) + 6px));transform:translateY(-50%);flex-direction:column;max-height:calc(100% - 24px);overflow-y:auto;scrollbar-width:none}
+body[data-dock="right"] #toolbar{top:50%;right:max(10px,calc(env(safe-area-inset-right,0px) + 6px));transform:translateY(-50%);flex-direction:column;max-height:calc(100% - 24px);overflow-y:auto;scrollbar-width:none}
+#toolbar::-webkit-scrollbar{display:none}
+.tb{position:relative;flex:none;width:46px;height:46px;border:0;border-radius:12px;background:transparent;display:grid;place-items:center;cursor:pointer;color:var(--muted);padding:0}
+.tb svg{width:23px;height:23px}
+.tb:hover{background:var(--hover)}
+.tb[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.tb[disabled]{opacity:.32;cursor:default}
+.tb[disabled]:hover{background:transparent}
+.tb[data-tool]::after{content:"";position:absolute;left:50%;bottom:5px;width:16px;height:4px;margin-left:-8px;border-radius:2px;background:var(--mark,transparent)}
+.tb.dot::before{content:"";width:24px;height:24px;border-radius:50%;background:var(--cur,var(--ink));box-shadow:0 0 0 2px var(--bar),0 0 0 3.5px var(--line)}
+.tb.dot[aria-expanded="true"]::before{box-shadow:0 0 0 2px var(--bar),0 0 0 3.5px var(--accent)}
+.tbsep{flex:none;width:1px;height:26px;background:var(--line);margin:0 4px}
+body:not([data-dock="top"]) .tbsep{width:26px;height:1px;margin:4px 0}
+#grip{width:26px;cursor:grab;touch-action:none;color:var(--muted)}
+#grip svg{width:16px;height:16px}
+body:not([data-dock="top"]) #grip{width:46px;height:30px}
+#pop{position:absolute;z-index:7;background:var(--bar);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+#pop .lbl{font-size:11px;color:var(--muted);letter-spacing:.06em;margin-bottom:2px}
+#dockhint{position:absolute;z-index:4;pointer-events:none;border:2px dashed var(--accent);background:var(--accent-soft);opacity:.75;border-radius:14px}
+body[data-dock="left"] #pages{padding-left:calc(max(16px,env(safe-area-inset-left,0px)) + 74px)}
+body[data-dock="right"] #pages{padding-right:calc(max(16px,env(safe-area-inset-right,0px)) + 74px)}
+body[data-dock="top"] #pages{padding-top:84px}
+body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) + 76px)}
+.swatches,.sizes{display:flex;align-items:center;gap:6px;min-height:34px}
+.sw{width:36px;height:36px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center;cursor:pointer;padding:0}
+.sw::before{content:"";width:24px;height:24px;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)}
 .sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
-.sz{width:30px;height:30px;border:0;border-radius:8px;background:transparent;display:grid;place-items:center;cursor:pointer}
+.sz{width:40px;height:36px;border:0;border-radius:8px;background:transparent;display:grid;place-items:center;cursor:pointer}
 .sz::before{content:"";width:var(--d);height:var(--d);border-radius:50%;background:var(--ink);opacity:.75}
 .sz[aria-pressed="true"]{background:var(--accent-soft)}
 .sz[aria-pressed="true"]::before{background:var(--accent);opacity:1}
 
-#scroller{flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y;overscroll-behavior:contain}
+#scroller{position:absolute;inset:0;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain}
 #pages{position:relative;display:flex;flex-direction:column;align-items:center;gap:20px;min-width:100%;width:max-content;box-sizing:border-box;
   padding-block:24px 96px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .page{position:relative;background:var(--paper);box-shadow:var(--shadow);flex:none;touch-action:pan-x pan-y}
@@ -122,46 +142,55 @@ button,label.btn{font:inherit;color:inherit}
 <body>
 
 <header class="bar">
-  <div class="grp file">
+  <div class="grp">
     <label class="btn" for="file" title="PDF・Word・Excel・PowerPointを開く">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/></svg><span>開く</span>
     </label>
     <input id="file" class="vh" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.presentationml.presentation">
     <button class="btn" id="newnote" title="方眼ノートを新規作成">新規</button>
-    <span class="docname" id="docname">読み込み中…</span>
   </div>
-
-  <div class="grp tools" role="toolbar" aria-label="ツール">
-    <div class="seg">
-      <button class="tool" data-tool="pen" aria-label="ペン (P)" title="ペン (P)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M15.5 4.5l4 4L9 19l-5 1 1-5z"/><path d="M13.5 6.5l4 4"/></svg></button>
-      <button class="tool" data-tool="hl" aria-label="蛍光ペン (H)" title="蛍光ペン (H)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M14 4l6 6-7.5 7.5h-3L7 15v-3z"/><path d="M7 15l-3 3.5h5"/><path d="M4 21h16" stroke-width="2.4" opacity=".5"/></svg></button>
-      <button class="tool" data-tool="eraser" aria-label="消しゴム (E)" title="消しゴム (E)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M9 19.5L3.8 14.3a1.5 1.5 0 0 1 0-2.1l7.4-7.4a1.5 1.5 0 0 1 2.1 0l5.6 5.6a1.5 1.5 0 0 1 0 2.1l-7.6 7z"/><path d="M8 9l7 7M9 19.5h11"/></svg></button>
-      <button class="tool" data-tool="lasso" aria-label="なげなわ (L)" title="なげなわ：囲んで移動・削除 (L)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="3 2.6"><path d="M12 4c4.7 0 8 2.4 8 5.5S16.7 15 12 15s-8-2.4-8-5.5S7.3 4 12 4z"/><path d="M7.5 14c-.8 1.5-.3 3.3 1.5 4.3" stroke-dasharray="none"/></svg></button>
-    </div>
-    <div class="swatches" id="swatches"></div>
-    <div class="sizes" id="sizes"></div>
-  </div>
-
-  <div class="grp acts">
-    <button class="btn toggle" id="pencil" aria-pressed="false" title="オンにすると指はスクロール・ズーム専用になります">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M17 3.5l3.5 3.5L8 19.5 3.5 20.5 4.5 16z"/></svg><span>Pencilのみ</span></button>
-    <span class="sep"></span>
-    <button class="btn" id="undo" aria-label="取り消す" title="取り消す（2本指タップ）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
-    <button class="btn" id="redo" aria-label="やり直す" title="やり直す（3本指タップ）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+  <span class="docname" id="docname">読み込み中…</span>
+  <div class="grp">
     <button class="btn" id="addpage" aria-label="ページを追加" title="今のページの後ろに方眼ページを追加">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M8.5 13.5h7" stroke-linecap="round"/></svg></button>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M8.5 13.5h7" stroke-linecap="round"/></svg><span>ページ追加</span></button>
     <button class="btn primary" id="export" title="書き込みを含めたPDFを保存">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6.5"/></svg><span>書き出し</span></button>
   </div>
 </header>
 
-<main id="scroller"><div id="pages"></div></main>
+<div class="work" id="work">
+  <main id="scroller"><div id="pages"></div></main>
+
+  <div id="toolbar" role="toolbar" aria-label="書き込みツール">
+    <button class="tb" id="grip" aria-label="ツールバーの位置（ドラッグで上・左・右へ移動）" title="ドラッグで上・左・右へ移動／タップで切り替え">
+      <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="3.5" r="1.3"/><circle cx="11" cy="3.5" r="1.3"/><circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/><circle cx="5" cy="12.5" r="1.3"/><circle cx="11" cy="12.5" r="1.3"/></svg></button>
+    <span class="tbsep"></span>
+    <button class="tb" data-tool="pen" aria-label="ペン (P)" title="ペン (P)：もう一度タップで色・太さ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M15.5 4.5l4 4L9 19l-5 1 1-5z"/><path d="M13.5 6.5l4 4"/></svg></button>
+    <button class="tb" data-tool="hl" aria-label="蛍光ペン (H)" title="蛍光ペン (H)：もう一度タップで色・太さ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M14 4l6 6-7.5 7.5h-3L7 15v-3z"/><path d="M7 15l-3 3.5h5"/></svg></button>
+    <button class="tb" data-tool="eraser" aria-label="消しゴム (E)" title="消しゴム (E)：もう一度タップで大きさ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M9 19.5L3.8 14.3a1.5 1.5 0 0 1 0-2.1l7.4-7.4a1.5 1.5 0 0 1 2.1 0l5.6 5.6a1.5 1.5 0 0 1 0 2.1l-7.6 7z"/><path d="M8 9l7 7M9 19.5h11"/></svg></button>
+    <button class="tb" data-tool="lasso" aria-label="なげなわ (L)" title="なげなわ：囲んで移動・削除 (L)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="3 2.6"><path d="M12 4c4.7 0 8 2.4 8 5.5S16.7 15 12 15s-8-2.4-8-5.5S7.3 4 12 4z"/><path d="M7.5 14c-.8 1.5-.3 3.3 1.5 4.3" stroke-dasharray="none"/></svg></button>
+    <span class="tbsep"></span>
+    <button class="tb dot" id="colorbtn" aria-label="色と太さ" aria-expanded="false" title="色と太さ"></button>
+    <span class="tbsep"></span>
+    <button class="tb" id="undo" aria-label="取り消す" title="取り消す（2本指タップ）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button class="tb" id="redo" aria-label="やり直す" title="やり直す（3本指タップ）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+    <span class="tbsep"></span>
+    <button class="tb" id="pencil" aria-pressed="false" aria-label="Pencilのみで書く" title="オンにすると指では書かず、スクロール・ズーム専用になります（手のひら誤タッチ防止）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V6.5a1.5 1.5 0 0 1 3 0V12"/><path d="M11 11.5V4.5a1.5 1.5 0 0 1 3 0V12"/><path d="M14 11.5V6.5a1.5 1.5 0 0 1 3 0V14c0 4.2-2.3 7-6.2 7-2.8 0-4.2-1.3-5.8-4l-1.6-2.8a1.5 1.5 0 0 1 2.5-1.6L8 14"/></svg></button>
+  </div>
+
+  <div id="pop" hidden>
+    <div id="popcol"><div class="lbl">色</div><div class="swatches" id="swatches"></div></div>
+    <div><div class="lbl">太さ</div><div class="sizes" id="sizes"></div></div>
+  </div>
+  <div id="dockhint" hidden></div>
+</div>
 
 <div class="chip" aria-live="polite">
   <span class="pg" id="pgno">– / –</span>
@@ -175,6 +204,8 @@ button,label.btn{font:inherit;color:inherit}
   <ul>
     <li>Apple Pencilで書くと自動で「Pencilのみ」になり、指はスクロールに使えます</li>
     <li>2本指でピンチ拡大・移動、2本指タップで取り消し、3本指タップでやり直し</li>
+    <li>ツールバーは左端の「⋮⋮」をドラッグすると、上・左・右に動かせます</li>
+    <li>選択中のペンをもう一度タップすると、色と太さを変えられます</li>
     <li>線を引いて止めると直線に補正</li>
     <li>Word・Excel・PowerPointも「開く」から読み込めます（PDFに変換して表示）</li>
     <li>書き込みはこの端末のブラウザに自動保存</li>
@@ -305,7 +336,7 @@ function mountPages(){
   updateIndicator();
 }
 function computeFit(){
-  const avail = Math.max(240, scroller.clientWidth - 40);
+  const avail = Math.max(240, scroller.clientWidth - 40 - (st.dock!=='top' ? 76 : 0));
   const maxW = Math.max(1, ...D.pages.map(p=>p.w));
   st.fit = Math.min(avail, 1000)/maxW;
 }
@@ -403,7 +434,7 @@ function inSel(x,y){ if(!sel) return false; const pad=14/cssK(), [a,b,c,d]=sel.b
 function positionSelBar(){
   const bar=$('#selbar'); if (!sel){ bar.hidden=true; return; }
   const r=sel.p.el.getBoundingClientRect(), k=cssK(), [x0,y0,x1,y1]=sel.bb;
-  const top=$('#scroller').getBoundingClientRect().top;
+  const top=$('#scroller').getBoundingClientRect().top + (st.dock==='top' ? 66 : 0);
   let y=r.top+y0*k-56; if (y<top+8) y=r.top+y1*k+16;
   bar.style.left=(r.left+(x0+x1)/2*k)+'px'; bar.style.top=y+'px'; bar.hidden=false;
 }
@@ -646,33 +677,84 @@ function updateIndicator(){
 }
 scroller.addEventListener('scroll', ()=>{ if (indRaf) return; indRaf=requestAnimationFrame(()=>{ indRaf=0; updateIndicator(); if (sel && !cur) positionSelBar(); }); }, { passive:true });
 let resizeT;
-window.addEventListener('resize', ()=>{ clearTimeout(resizeT); resizeT=setTimeout(()=>{ computeFit(); layout(); scheduleHiRes(); }, 120); });
+window.addEventListener('resize', ()=>{ closePop(); clearTimeout(resizeT); resizeT=setTimeout(()=>{ computeFit(); layout(); scheduleHiRes(); }, 120); });
 
 /* ---------- toolbar ---------- */
 function syncUI(){
   document.querySelectorAll('[data-tool]').forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.tool===st.tool)));
+  document.querySelector('[data-tool="pen"]').style.setProperty('--mark', PEN_COLORS[st.color.pen][0]);
+  document.querySelector('[data-tool="hl"]').style.setProperty('--mark', HL_COLORS[st.color.hl][0]);
+  const cb=$('#colorbtn');
+  const hasOpts = st.tool!=='lasso';
+  cb.disabled=!hasOpts;
+  cb.style.setProperty('--cur', st.tool==='pen' ? PEN_COLORS[st.color.pen][0] : st.tool==='hl' ? HL_COLORS[st.color.hl][0] : 'var(--muted)');
   const sw=$('#swatches'); sw.replaceChildren();
-  if (st.tool==='pen' || st.tool==='hl'){
+  const colored = st.tool==='pen' || st.tool==='hl';
+  $('#popcol').hidden=!colored;
+  if (colored){
     const cols=st.tool==='pen'?PEN_COLORS:HL_COLORS;
     cols.forEach(([c,name],i)=>{ const b=document.createElement('button'); b.className='sw'; b.style.setProperty('--c',c);
       b.setAttribute('aria-label',name); b.title=name; b.setAttribute('aria-pressed', String(i===st.color[st.tool]));
       b.onclick=()=>{ st.color[st.tool]=i; syncUI(); }; sw.append(b); });
   }
   const sz=$('#sizes'); sz.replaceChildren();
-  if (st.tool!=='lasso'){
+  if (hasOpts){
     const dots=st.tool==='pen'?[4,7,11]:st.tool==='hl'?[7,11,15]:[6,11,17];
     ['細','中','太'].forEach((n,i)=>{ const b=document.createElement('button'); b.className='sz'; b.style.setProperty('--d',dots[i]+'px');
       b.setAttribute('aria-label','太さ '+n); b.title='太さ '+n; b.setAttribute('aria-pressed', String(i===st.size[st.tool]));
       b.onclick=()=>{ st.size[st.tool]=i; syncUI(); }; sz.append(b); });
-  } else {
-    const hint=document.createElement('span'); hint.style.cssText='font-size:12px;color:var(--muted);padding:0 4px';
-    hint.textContent='囲んで選択 → ドラッグで移動'; sz.append(hint);
-  }
+  } else closePop();
   $('#pencil').setAttribute('aria-pressed', String(st.pencilOnly));
   $('#undo').disabled=!undoStack.length; $('#redo').disabled=!redoStack.length;
 }
-function setTool(t){ st.tool=t; if (t!=='lasso') clearSel(); syncUI(); }
-document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
+function setTool(t){ st.tool=t; if (t!=='lasso') clearSel(); closePop(); syncUI(); }
+document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>{
+  const t=b.dataset.tool;
+  if (st.tool===t && t!=='lasso') togglePop(b); else setTool(t);
+});
+
+/* ---------- popover & toolbar docking ---------- */
+const workEl=$('#work'), popEl=$('#pop'), tbEl=$('#toolbar');
+function closePop(){ popEl.hidden=true; $('#colorbtn').setAttribute('aria-expanded','false'); }
+function togglePop(anchor){
+  if (!popEl.hidden){ closePop(); return; }
+  if (st.tool==='lasso') return;
+  popEl.hidden=false; $('#colorbtn').setAttribute('aria-expanded','true');
+  const w=workEl.getBoundingClientRect(), a=anchor.getBoundingClientRect(), pw=popEl.offsetWidth, ph=popEl.offsetHeight;
+  let x,y;
+  if (st.dock==='left'){ x=a.right-w.left+10; y=a.top-w.top; }
+  else if (st.dock==='right'){ x=a.left-w.left-pw-10; y=a.top-w.top; }
+  else { x=a.left-w.left+a.width/2-pw/2; y=a.bottom-w.top+10; }
+  popEl.style.left=clamp(x,8,Math.max(8,w.width-pw-8))+'px';
+  popEl.style.top=clamp(y,8,Math.max(8,w.height-ph-8))+'px';
+}
+$('#colorbtn').onclick=()=>togglePop($('#colorbtn'));
+document.addEventListener('pointerdown', e=>{ if (!popEl.hidden && !popEl.contains(e.target) && !e.target.closest('#toolbar')) closePop(); }, true);
+try { const d=localStorage.getItem('akanib-dock'); st.dock = (d==='left'||d==='right') ? d : 'top'; } catch(e){ st.dock='top'; }
+function applyDock(){ document.body.dataset.dock=st.dock; closePop(); computeFit(); layout(); scheduleHiRes(); }
+function dockAt(clientX){ const w=workEl.getBoundingClientRect(), f=(clientX-w.left)/w.width; return f<0.2 ? 'left' : f>0.8 ? 'right' : 'top'; }
+function setDock(d){ st.dock=d; try{ localStorage.setItem('akanib-dock', d); }catch(e){} applyDock(); }
+(() => {
+  const grip=$('#grip'), hint=$('#dockhint'); let drag=null;
+  grip.addEventListener('pointerdown', e=>{ drag={ id:e.pointerId, x:e.clientX, y:e.clientY, moved:false }; grip.setPointerCapture(e.pointerId); closePop(); });
+  grip.addEventListener('pointermove', e=>{
+    if (!drag || e.pointerId!==drag.id) return;
+    if (!drag.moved && Math.hypot(e.clientX-drag.x, e.clientY-drag.y)<8) return;
+    drag.moved=true; const d=dockAt(e.clientX), w=workEl.getBoundingClientRect();
+    hint.hidden=false;
+    if (d==='top') Object.assign(hint.style,{ left:'10px', right:'10px', top:'8px', bottom:'auto', width:'auto', height:'62px' });
+    else Object.assign(hint.style,{ [d]:'8px', [d==='left'?'right':'left']:'auto', top:'10px', bottom:'10px', width:'66px', height:'auto' });
+    drag.d=d;
+  });
+  const end=e=>{
+    if (!drag || e.pointerId!==drag.id) return;
+    hint.hidden=true;
+    if (drag.moved) { if (drag.d && drag.d!==st.dock) setDock(drag.d); }
+    else if (e.type==='pointerup') setDock(st.dock==='top' ? 'right' : st.dock==='right' ? 'left' : 'top');
+    drag=null;
+  };
+  grip.addEventListener('pointerup', end); grip.addEventListener('pointercancel', end);
+})();
 $('#pencil').onclick=()=>{ st.pencilOnly=!st.pencilOnly; syncUI(); toast(st.pencilOnly?'Pencilのみで描画：指はスクロール・ズーム':'指でも描画できます（スクロールは2本指）'); };
 $('#undo').onclick=undo; $('#redo').onclick=redo;
 $('#seldel').onclick=()=>{ if(!sel) return; const ids=sel.ids, p=sel.p; clearSel(); setStrokes(p, p.strokes.filter(s=>!ids.has(s.id))); redrawInk(p); };
@@ -691,7 +773,7 @@ window.addEventListener('keydown', e=>{
   const map={p:'pen',h:'hl',e:'eraser',l:'lasso'}; const t=map[e.key.toLowerCase()];
   if (t) setTool(t);
   if ((e.key==='Delete'||e.key==='Backspace') && sel) $('#seldel').click();
-  if (e.key==='Escape') clearSel();
+  if (e.key==='Escape'){ clearSel(); closePop(); }
 });
 
 /* ---------- pages ---------- */
@@ -1493,6 +1575,7 @@ async function loadSample(){
 
 /* ---------- boot ---------- */
 async function boot(){
+  document.body.dataset.dock=st.dock;
   syncUI();
   if (!window.pdfjsLib || !window.PDFLib){ $('#docname').textContent='ライブラリを読み込めませんでした'; toast('PDFライブラリの読み込みに失敗しました。再読み込みしてください', 6000); return; }
   let ok=false;
