@@ -131,10 +131,10 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 #wrange{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--accent)}
 .wval{font-family:var(--f-num);font-size:12px;min-width:58px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
 
-#scroller{position:absolute;inset:0;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain}
+#scroller{position:absolute;inset:0;overflow:auto;touch-action:none;overscroll-behavior:contain}
 #pages{position:relative;display:flex;flex-direction:column;align-items:center;gap:20px;min-width:100%;width:max-content;box-sizing:border-box;
   padding-block:24px 96px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
-.page{position:relative;background:var(--paper);box-shadow:var(--shadow);flex:none;touch-action:pan-x pan-y}
+.page{position:relative;background:var(--paper);box-shadow:var(--shadow);flex:none;touch-action:none}
 .page canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
 
 .chip{position:fixed;right:max(16px,calc(env(safe-area-inset-right,0px) + 12px));bottom:calc(env(safe-area-inset-bottom,0px) + 16px);
@@ -269,7 +269,6 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 <div id="toast" class="off" role="status"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 (() => {
@@ -308,7 +307,20 @@ let tipBox = null;
 let livePage = null;
 
 /* ---------- pdf.js: run in main thread (worker script loaded as a plain script) ---------- */
-try { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; } catch(e){}
+// PDFの読み込み・解析を画面とは別のスレッドで行い、指の操作が止まらないようにする（使えない環境では従来どおり）
+const PDF_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function setupPdfWorker(){
+  return new Promise(res=>{
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc=PDF_WORKER;
+      const w=new Worker(URL.createObjectURL(new Blob([`importScripts('${PDF_WORKER}');`],{ type:'text/javascript' })));
+      const t=setTimeout(()=>{ try{ w.terminate(); }catch(_){} res(false); }, 3000);
+      const ok=()=>{ clearTimeout(t); w.removeEventListener('message', ok); pdfjsLib.GlobalWorkerOptions.workerPort=w; res(true); };
+      w.addEventListener('message', ok);
+      w.addEventListener('error', ()=>{ clearTimeout(t); try{ w.terminate(); }catch(_){} res(false); });
+    } catch(e){ res(false); }
+  });
+}
 
 /* ---------- toast ---------- */
 let toastT;
@@ -316,7 +328,7 @@ function toast(msg, ms=2600){ const t=$('#toast'); t.textContent=msg; t.classLis
 
 /* ---------- geometry ---------- */
 function cssK(){ return st.fit*st.zoom; }
-function res(cw, ch){ let r = Math.min(window.devicePixelRatio||1, 3); const MAX=7e6; if (cw*ch*r*r > MAX) r = Math.sqrt(MAX/(cw*ch)); return r; }
+function res(cw, ch){ let r = Math.min(window.devicePixelRatio||1, 3); const MAX=6e6; if (cw*ch*r*r > MAX) r = Math.sqrt(MAX/(cw*ch)); return r; }
 function bbOf(s){ if (s.bb) return s.bb; const p=s.pts; let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
   for (let i=0;i<p.length;i+=3){ if(p[i]<a)a=p[i]; if(p[i]>c)c=p[i]; if(p[i+1]<b)b=p[i+1]; if(p[i+1]>d)d=p[i+1]; }
   return (s.bb=[a,b,c,d]); }
@@ -399,10 +411,11 @@ function smoothPts(pts){       // サンプル図面の手書き例で使う
 /* ---------- pages, layout, rendering ---------- */
 const visible = new Set();
 const io = new IntersectionObserver(entries => {
+  if (pinching()) return;        // 拡大縮小の途中は見え方が仮なので、確定後にまとめて判定する
   for (const en of entries){ const p=en.target._p; if(!p) continue;
     if (en.isIntersecting) visible.add(p); else { visible.delete(p); freePage(p); } }
   requestRender();
-}, { root:scroller, rootMargin:'120% 60% 120% 60%' });
+}, { root:scroller, rootMargin:'80% 40% 80% 40%' });
 
 function makePageEl(p){
   const el=document.createElement('div'); el.className='page';
@@ -429,6 +442,12 @@ function layout(){
   $('#zoomreset').textContent = Math.round(st.zoom*100)+'%';
   if (sel) positionSelBar();
 }
+function syncVisible(){          // 拡大縮小を確定した後、見えている範囲のページを数え直す
+  const r=scroller.getBoundingClientRect(), mY=r.height*0.8, mX=r.width*0.4;
+  for (const p of D.pages){ if (!p.el) continue; const b=p.el.getBoundingClientRect();
+    const on=b.bottom>r.top-mY && b.top<r.bottom+mY && b.right>r.left-mX && b.left<r.right+mX;
+    if (on) visible.add(p); else if (visible.has(p)){ visible.delete(p); freePage(p); } }
+}
 function freePage(p){
   p.seq++; if (p.task){ try{p.task.cancel();}catch(e){} p.task=null; }
   if (p.pdfCanvas.width){ p.pdfCanvas.width=0; p.pdfCanvas.height=0; p.inkCanvas.width=0; p.inkCanvas.height=0; }
@@ -436,6 +455,7 @@ function freePage(p){
 }
 let rendering=false, renderAgain=false;
 async function requestRender(){
+  if (pinching()) return;        // 拡大縮小の最中は描き直さない（指を離した後にまとめて描く）
   if (rendering){ renderAgain=true; return; }
   rendering=true;
   do {
@@ -443,7 +463,7 @@ async function requestRender(){
     const mid = scroller.scrollTop + scroller.clientHeight/2;
     const list=[...visible].filter(p=>D.pages.includes(p))
       .sort((a,b)=>Math.abs(a.el.offsetTop+a.el.offsetHeight/2-mid)-Math.abs(b.el.offsetTop+b.el.offsetHeight/2-mid));
-    for (const p of list){ await renderPage(p); if (renderAgain) break; }
+    for (const p of list){ if (pinching()) break; await renderPage(p); if (renderAgain) break; }
   } while (renderAgain);
   rendering=false;
 }
@@ -465,14 +485,14 @@ async function renderPage(p){
   const ctx=c.getContext('2d');
   if (p.kind==='pdf'){
     try {
-      const pg=await D.pdf.getPage(p.src); if (seq!==p.seq) return;
+      const pg=await D.pdf.getPage(p.src); if (seq!==p.seq){ c.width=0; c.height=0; return; }
       ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
       const task=pg.render({ canvasContext:ctx, viewport:pg.getViewport({scale}) });
       p.task=task; await task.promise; if (p.task===task) p.task=null;
-    } catch(e){ return; }
-    if (seq!==p.seq) return;
+    } catch(e){ c.width=0; c.height=0; return; }
+    if (seq!==p.seq){ c.width=0; c.height=0; return; }
   } else drawPaper(ctx, p, scale);
-  p.el.replaceChild(c, p.pdfCanvas); p.pdfCanvas=c;
+  const old=p.pdfCanvas; p.el.replaceChild(c, old); p.pdfCanvas=c; old.width=0; old.height=0;   // 古い画像のメモリをすぐ返す
   p.inkCanvas.width=W; p.inkCanvas.height=H;
   p.renderedKey=key; redrawInk(p, cur && cur.mode==='move' && cur.p===p ? sel.ids : null);
 }
@@ -483,7 +503,7 @@ function redrawInk(p, hide){
   for (const k of p.strokes){ if (hide && hide.has(k.id)) continue; drawStroke(ctx,k); }
 }
 let hiResT;
-function scheduleHiRes(){ clearTimeout(hiResT); hiResT=setTimeout(()=>{ requestRender(); if (sel) drawSel(); }, 180); }
+function scheduleHiRes(){ clearTimeout(hiResT); hiResT=setTimeout(()=>{ requestRender(); if (sel) drawSel(); }, 220); }
 
 /* ---------- live overlay ---------- */
 function attachLive(p){
@@ -762,18 +782,65 @@ function cancelTouchStroke(){
   finish(true);
 }
 
-/* ---------- touch: palm rejection, pinch, multi-finger taps ---------- */
+/* ---------- touch: palm rejection, one-finger scroll, pinch, multi-finger taps ---------- */
 let tap=null;
-const PALM_R=28;                       // 接触の半径がこれより大きいタッチは手のひらとみなす（CSS px）
+const PALM_R=60;                       // 親指を寝かせた接触より明らかに大きいものだけを手のひらとみなす（CSS px）
 const isPalm=t=>Math.max(t.radiusX||0, t.radiusY||0)>PALM_R;
 const fingers = list => [...list].filter(t => t.touchType!=='stylus' && !isPalm(t));
+function pinching(){ return !!(tp && tp.armed); }
+
+// 1本指のスクロール（慣性つき）。ブラウザ標準のスクロールを使わないので、2本指の拡大と取り合いにならない
+let pan=null, panRaf=0, inertia=0;
+function stopInertia(){ if (inertia){ cancelAnimationFrame(inertia); inertia=0; } }
+function startPan(t){
+  stopInertia(); const now=performance.now();
+  pan={ id:t.identifier, x:t.clientX, y:t.clientY, sl:scroller.scrollLeft, st:scroller.scrollTop, tx:scroller.scrollLeft, ty:scroller.scrollTop, t0:now, hist:[[now,t.clientX,t.clientY]] };
+}
+function movePan(e){
+  const t=[...e.touches].find(q=>q.identifier===pan.id); if (!t) return;
+  const now=performance.now(); pan.hist.push([now,t.clientX,t.clientY]);
+  while (pan.hist.length>2 && now-pan.hist[0][0]>90) pan.hist.shift();
+  pan.tx=pan.sl-(t.clientX-pan.x); pan.ty=pan.st-(t.clientY-pan.y);
+  if (!panRaf) panRaf=requestAnimationFrame(()=>{ panRaf=0; if (pan){ scroller.scrollLeft=pan.tx; scroller.scrollTop=pan.ty; } });
+}
+function endPan(fling){
+  const p=pan; pan=null; if (!p) return;
+  if (panRaf){ cancelAnimationFrame(panRaf); panRaf=0; scroller.scrollLeft=p.tx; scroller.scrollTop=p.ty; }
+  if (!fling) return;
+  const h=p.hist, a=h[0], b=h[h.length-1], dt=b[0]-a[0];
+  if (h.length<2 || dt<=0 || performance.now()-b[0]>70) return;
+  let vx=(b[1]-a[1])/dt, vy=(b[2]-a[2])/dt;            // px/ms
+  if (Math.hypot(vx,vy)<0.08) return;
+  let last=performance.now(), fx=scroller.scrollLeft, fy=scroller.scrollTop;
+  const step=now=>{
+    const d=Math.min(34, now-last); last=now;
+    fx-=vx*d; fy-=vy*d;
+    const l0=scroller.scrollLeft, t0=scroller.scrollTop;
+    scroller.scrollLeft=fx; scroller.scrollTop=fy;
+    const f=Math.pow(0.9965, d); vx*=f; vy*=f;
+    if ((Math.abs(scroller.scrollLeft-l0)<0.5 && Math.abs(scroller.scrollTop-t0)<0.5 && Math.hypot(vx,vy)*d>1) || Math.hypot(vx,vy)<0.02){ inertia=0; return; }
+    inertia=requestAnimationFrame(step);
+  };
+  inertia=requestAnimationFrame(step);
+}
+function revertPan(){             // 手のひらが先に触れて少し動いた分は、ペンが触れた時点で元に戻す
+  if (!pan) return;
+  if (panRaf){ cancelAnimationFrame(panRaf); panRaf=0; }
+  if (performance.now()-pan.t0<400){ scroller.scrollLeft=pan.sl; scroller.scrollTop=pan.st; }
+  pan=null;
+}
+
 function anchorAt(cx,cy){       // 指の間にあるページ上の位置（拡大後もこの位置を指の間に保つ）
   const X=cx+scroller.scrollLeft, Y=cy+scroller.scrollTop; let best=null, bd=Infinity;
   for (const p of D.pages){ const el=p.el; if (!el) continue; const t=el.offsetTop, h=el.offsetHeight;
     const dd = Y<t ? t-Y : Y>t+h ? Y-t-h : 0; if (dd<bd){ bd=dd; best=el; } }
   return best ? { el:best, fx:(X-best.offsetLeft)/best.offsetWidth, fy:(Y-best.offsetTop)/best.offsetHeight } : null;
 }
+function cancelRenders(){          // 描き直しの途中なら止めて、指の動きに処理を回す
+  for (const p of D.pages){ if (p.task){ try{ p.task.cancel(); }catch(e){} p.task=null; p.seq++; } }
+}
 function startPinch(fs){
+  endPan(false); stopInertia();
   const r=scroller.getBoundingClientRect();
   const cx=(fs[0].clientX+fs[1].clientX)/2-r.left, cy=(fs[0].clientY+fs[1].clientY)/2-r.top;
   tp={ ids:[fs[0].identifier, fs[1].identifier], d0:Math.hypot(fs[0].clientX-fs[1].clientX, fs[0].clientY-fs[1].clientY)||1,
@@ -793,7 +860,7 @@ function updatePinch(e){
   const cx=(a.clientX+b.clientX)/2-tp.r.left, cy=(a.clientY+b.clientY)/2-tp.r.top;
   if (!tp.armed){
     if (Math.abs(d-tp.d0)<3 && Math.hypot(cx-tp.c0[0], cy-tp.c0[1])<3) return;
-    tp.armed=true; closePop();
+    tp.armed=true; closePop(); cancelRenders();
     pinchSpacer.style.width=scroller.scrollWidth+'px'; pinchSpacer.style.height=scroller.scrollHeight+'px';
     pagesEl.style.transformOrigin='0 0'; pagesEl.style.willChange='transform';
     if (sel) $('#selbar').hidden=true;
@@ -809,37 +876,41 @@ function endPinch(commit){    // 指を離したら倍率を確定し、指の�
     st.zoom=clamp(t.z0*t.s, ZMIN, ZMAX); layout();
     const a=t.anchor;
     if (a){ scroller.scrollLeft=a.el.offsetLeft+a.fx*a.el.offsetWidth-t.c[0]; scroller.scrollTop=a.el.offsetTop+a.fy*a.el.offsetHeight-t.c[1]; }
-    scheduleHiRes(); updateIndicator();
+    updateIndicator();
   }
   pinchSpacer.style.width='1px'; pinchSpacer.style.height='1px';
+  if (t.armed){ syncVisible(); scheduleHiRes(); }
   if (sel) positionSelBar();
 }
 scroller.addEventListener('touchstart', e => {
   const now=performance.now();
+  if (e.cancelable) e.preventDefault();      // スクロールも拡大もアプリ側で処理する（ブラウザ標準の動きと取り合わない）
+  stopInertia();
   const stylus=[...e.touches].some(t=>t.touchType==='stylus');
   const palm=[...e.changedTouches].some(t=>t.touchType!=='stylus' && isPalm(t));
   if (!tap) tap={ t0:now, max:0, moved:false, bad:false, minSep:1e9, pos:new Map() };
-  if (stylus){                 // ペンが触れたら、直前に手のひらで始まった拡大は取り消す
-    tap.bad=true; if (tp) endPinch(now-tp.t0>400);
-    if (e.cancelable) e.preventDefault(); return;
+  if (stylus){                 // ペンが触れたら、直前に手のひらで始まった拡大や移動は取り消す
+    tap.bad=true; if (tp) endPinch(now-tp.t0>400); revertPan(); return;
   }
-  if (palm){ tap.bad=true; if (e.cancelable) e.preventDefault(); return; }
+  if (palm){ tap.bad=true; return; }
   if (now<penUntil) tap.bad=true;   // 書いた直後の接触では、2本指タップの取り消しをしない（拡大・スクロールはできる）
   for (const t of e.changedTouches) tap.pos.set(t.identifier,[t.clientX,t.clientY]);
   const fs=fingers(e.touches);
   tap.max=Math.max(tap.max, fs.length);
   for (let i=0;i<fs.length;i++) for (let j=i+1;j<fs.length;j++) tap.minSep=Math.min(tap.minSep, Math.hypot(fs[i].clientX-fs[j].clientX, fs[i].clientY-fs[j].clientY));
-  if (fs.length>=2){ if (e.cancelable) e.preventDefault(); cancelTouchStroke(); if (!tp) startPinch(fs); }
-  else if (fs.length===1 && !st.pencilOnly && e.target.closest('.page')){ if (e.cancelable) e.preventDefault(); }
+  if (fs.length>=2){ cancelTouchStroke(); if (!tp) startPinch(fs); }
+  else if (fs.length===1 && st.pencilOnly && !tp && !pan) startPan(fs[0]);
 }, { passive:false });
 scroller.addEventListener('touchmove', e => {
+  if (e.cancelable) e.preventDefault();
   if (tap) for (const t of e.changedTouches){ const s=tap.pos.get(t.identifier); if (s && Math.hypot(t.clientX-s[0], t.clientY-s[1])>12) tap.moved=true; }
-  if (tp){ if (e.cancelable) e.preventDefault(); updatePinch(e); return; }
-  if ([...e.touches].some(t=>t.touchType==='stylus') || (cur && cur.type==='touch')){ if (e.cancelable) e.preventDefault(); }
+  if (tp){ updatePinch(e); return; }
+  if (pan) movePan(e);
 }, { passive:false });
 function touchEnd(e){
   const fs=fingers(e.touches);
-  if (tp && fs.length<2) endPinch(true);
+  if (tp && fs.length<2){ endPinch(true); if (fs.length===1 && st.pencilOnly) startPan(fs[0]); }
+  if (pan && ![...e.touches].some(t=>t.identifier===pan.id)) endPan(e.type==='touchend');
   if (e.touches.length===0 && tap){
     const dt=performance.now()-tap.t0;
     if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36 && performance.now()>=penUntil){
@@ -1938,6 +2009,7 @@ async function boot(){
   document.body.dataset.dock=st.dock;
   syncUI();
   if (!window.pdfjsLib || !window.PDFLib){ $('#docname').textContent='ライブラリを読み込めませんでした'; toast('PDFライブラリの読み込みに失敗しました。再読み込みしてください', 6000); return; }
+  await setupPdfWorker();
   let ok=false;
   try { ok=await restore(); } catch(e){ ok=false; }
   if (!ok){ try { await loadSample(); } catch(e){ console.error(e); $('#docname').textContent='読み込みエラー'; } }
