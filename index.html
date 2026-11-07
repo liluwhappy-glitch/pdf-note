@@ -116,6 +116,7 @@ body[data-dock="right"] #pages{padding-right:calc(max(16px,env(safe-area-inset-r
 body[data-dock="top"] #pages{padding-top:84px}
 body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) + 76px)}
 .swatches,.sizes{display:flex;align-items:center;gap:6px;min-height:34px}
+#swatches{flex-wrap:wrap;gap:2px 4px;width:226px;max-width:calc(100vw - 72px)}
 .sw{width:36px;height:36px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center;cursor:pointer;padding:0}
 .sw::before{content:"";width:24px;height:24px;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)}
 .sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
@@ -264,9 +265,9 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <span class="tbsep"></span>
     <button class="tb dot" id="colorbtn" aria-label="色と太さ" aria-expanded="false" title="色と太さ"></button>
     <span class="tbsep"></span>
-    <button class="tb" id="undo" aria-label="取り消す" title="取り消す（2本指タップ）">
+    <button class="tb" id="undo" aria-label="取り消す" title="取り消す">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
-    <button class="tb" id="redo" aria-label="やり直す" title="やり直す（3本指タップ）">
+    <button class="tb" id="redo" aria-label="やり直す" title="やり直す">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
     <span class="tbsep"></span>
     <button class="tb" id="pencil" aria-pressed="false" aria-label="Pencilのみで書く" title="オンにすると指では書かず、スクロール・ズーム専用になります">
@@ -379,8 +380,10 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 const $ = s => document.querySelector(s);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-const PEN_COLORS = [['#1c1c1e','黒'],['#1f4fd1','青'],['#d6322b','赤'],['#1f8a4c','緑'],['#e07a00','オレンジ']];
-const HL_COLORS  = [['#ffd400','黄'],['#6fe05c','緑'],['#ff6fb0','ピンク'],['#5cc4ff','水色'],['#ffa53a','オレンジ']];
+// ペンとマーカーは同じ10色（マーカーは薄く重なる）
+const PEN_COLORS = [['#1c1c1e','黒'],['#d6322b','赤'],['#f08a00','オレンジ'],['#ffd400','黄'],['#6fcf3c','黄緑'],
+                    ['#1f8a4c','緑'],['#2fb4f0','水色'],['#1f4fd1','青'],['#7a3fc0','紫'],['#ff5fa8','ピンク']];
+const HL_COLORS  = PEN_COLORS;
 const SIZES = { pen:[0.5,1,2], hl:[7,12,18], eraser:[5,12,24] };   // pt
 const WRANGE = { pen:[0.28, 8.5], hl:[4.25, 28.3] };                 // 太さの範囲 pt（ペン0.1〜3.0mm、マーカー1.5〜10mm）
 const PT_MM = 0.3528;
@@ -388,7 +391,7 @@ const HL_ALPHA = 0.38;
 const ZMIN = 0.5, ZMAX = 4;
 const SEL_COLOR = '#2457d6';
 
-const st = { editSel:false, tool:'pen', color:{pen:0, hl:0}, size:{pen:1, hl:1, eraser:1}, width:{ pen:1, hl:12 },
+const st = { editSel:false, tool:'pen', color:{pen:0, hl:3}, size:{pen:1, hl:1, eraser:1}, width:{ pen:1, hl:12 },
              pencilOnly:false, pencilSeen:false, zoom:1, fit:1 };
 try { const w=JSON.parse(localStorage.getItem('akanib-width')||'null');
   if (w) for (const t of ['pen','hl']) if (typeof w[t]==='number') st.width[t]=Math.min(WRANGE[t][1], Math.max(WRANGE[t][0], w[t])); } catch(e){}
@@ -665,7 +668,7 @@ const SH_KINDS=[['rect','四角'],['rrect','角丸'],['ellipse','円・楕円'],
 const SH_ICON={ rect:'<rect x="4" y="6" width="16" height="12"/>', rrect:'<rect x="4" y="6" width="16" height="12" rx="4"/>', ellipse:'<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   tri:'<path d="M12 5l8 14H4z"/>', diamond:'<path d="M12 4l8 8-8 8-8-8z"/>', cloud:'<path d="M7 17a3.5 3.5 0 0 1-.6-6.9 5 5 0 0 1 9.5-1A4 4 0 0 1 17 17z"/>',
   line:'<path d="M5 19L19 5"/>', arrow:'<path d="M5 19L19 5M10 5h9v9"/>' };
-const SH_COLORS=[...PEN_COLORS, ['#ffd400','黄'],['#ff6fb0','ピンク'],['#5cc4ff','水色'],['#8e8e93','グレー'],['#ffffff','白']];
+const SH_COLORS=[...PEN_COLORS, ['#8e8e93','グレー'],['#ffffff','白']];
 const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud']);
 const SH_W=[0.5, 14];
 st.shape={ kind:'rect', color:'#d6322b', fill:null, fa:1, w:1.8, square:false };
@@ -1209,7 +1212,9 @@ function touchEnd(e){
   if (e.touches.length===0 && tap){
     const dt=performance.now()-tap.t0;
     if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36){
-      if (tap.max===2){ undo(); toast('取り消しました',1200); } else if (tap.max===3){ redo(); toast('やり直しました',1200); } }
+      if (tap.max===2){       // 2本指タップ：表示倍率を100%に戻す
+        const ps=[...tap.pos.values()], cx=ps.reduce((a,p)=>a+p[0],0)/ps.length, cy=ps.reduce((a,p)=>a+p[1],0)/ps.length;
+        if (Math.abs(st.zoom-1)>0.001){ zoomAt(1, cx, cy); toast('表示を100%に戻しました',1200); } } }
     tap=null;
   }
 }
@@ -3105,10 +3110,10 @@ function buildGuide(){
    card(I('[data-tool=lasso]'),'なげなわ（L）','囲んだ範囲の書き込みをまとめて選び、移動・複製・削除できます。')+
    card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・直線・矢印を描きます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
    card(I('#imgbtn'),'画像を貼る','撮影した写真や画像をページに貼ります。貼る前にトリミング（切り取り）ができ、紙や図面は台形補正・影とりをして貼ることもできます。貼ったあとは選択ツールで移動・拡大縮小、上からペンで書き込めます。')+
-   card(I('#undo'),'取り消し／やり直し','ボタンのほか、2本指でタップすると取り消し、3本指でタップするとやり直しです。')+
+   card(I('#undo'),'取り消し／やり直し','ツールバーの矢印ボタンで、1つずつ戻したり進めたりできます。')+
    card(I('#pencil'),'Pencilのみ','オンにすると指では書かず、指はスクロールとズーム専用になります。Pencilを検出すると自動でオンになります。')+
    `</div><h3>ページの見かた</h3><div class="ggrid">`+
-   card(ico('<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M4 12h16"/>'),'拡大・縮小・移動','2本指でつまむと拡大・縮小、指1本のドラッグでスクロールします（Pencilのみがオンのとき）。右下の＋／−でも拡大縮小できます。')+
+   card(ico('<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M4 12h16"/>'),'拡大・縮小・移動','2本指でつまむと拡大・縮小、2本指でタップすると表示が100%に戻ります。指1本のドラッグでスクロールします（Pencilのみがオンのとき）。右下の＋／−でも拡大縮小できます。')+
    card(guideIcon('#grip')||ico('<circle cx="8" cy="6" r="1.4"/><circle cx="16" cy="6" r="1.4"/><circle cx="8" cy="12" r="1.4"/><circle cx="16" cy="12" r="1.4"/>'),'ツールバーの移動','左端の「⋮⋮」をドラッグすると、ツールバーを上・左・右に動かせます。タップでも順に切り替わります。')+
    `</div><h3>ファイルとタブ</h3><div class="ggrid">`+
    card(ico('<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/>'),'開く','PDF・Word・Excel・PowerPointを開けます（Office系はPDFに変換して表示）。開いたファイルはタブに並び、タップで切り替え、✕で閉じます。「＋」でも新しいファイルを開けます。')+
