@@ -1,7 +1,7 @@
 {
-  "name": "PDF手書きノート",
-  "short_name": "手書きノート",
-  "description": "Apple PencilでPDFに書き込めるノート",
+  "name": "AkaNib",
+  "short_name": "AkaNib",
+  "description": "Apple PencilでPDF・Word・Excel・PowerPointに赤入れできるノート",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",
