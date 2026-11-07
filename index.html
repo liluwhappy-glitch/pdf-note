@@ -250,6 +250,9 @@ const uid = () => (++uidN).toString(36) + Date.now().toString(36).slice(-3);
 const scroller = $('#scroller'), pagesEl = $('#pages');
 const live = document.createElement('canvas'); live.className = 'live';
 const lctx = live.getContext('2d');
+const tipc = document.createElement('canvas'); tipc.className = 'live';   // 書いている先端だけを描く小さな層
+const tctx = tipc.getContext('2d');
+let tipBox = null;
 let livePage = null;
 
 /* ---------- pdf.js: run in main thread (worker script loaded as a plain script) ---------- */
@@ -270,36 +273,64 @@ function pip(x,y,poly){ let ins=false; for(let i=0,j=poly.length-2;i<poly.length
   if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi)) ins=!ins; } return ins; }
 
 /* ---------- stroke rendering ---------- */
+const STEP_PT=0.15;
+const srad=(s,pr)=> s.tool==='hl' ? s.w/2 : s.w/2*(0.3+1.2*pr);
+// 2次ベジェ曲線を細かい点に分けて out に追加（始点は含めず、終点を含める）。半径も同じ重みで補間する。
+function quadPts(ax,ay,ar,cx,cy,cr,bx,by,br,step,out){
+  const len=Math.hypot(cx-ax,cy-ay)+Math.hypot(bx-cx,by-cy);
+  const N=Math.max(1,Math.min(80,Math.ceil(len/step)));
+  for (let i=1;i<=N;i++){ const t=i/N, u=1-t;
+    out.push(u*u*ax+2*u*t*cx+t*t*bx, u*u*ay+2*u*t*cy+t*t*by, u*u*ar+2*u*t*cr+t*t*br); }
+}
+// 入力点の中点どうしをつなぐなめらかな中心線（書いている最中も確定後も同じ形）
+function centerline(s){
+  const p=s.pts, n=p.length/3, R=i=>srad(s,p[i*3+2]), d0=[p[0],p[1],R(0)];
+  if (n>1){
+    let mx=p[0],my=p[1],mr=R(0);
+    for (let i=1;i<n-1;i++){
+      const cx=p[i*3],cy=p[i*3+1],cr=R(i), bx=(cx+p[i*3+3])/2, by=(cy+p[i*3+4])/2, br=(cr+R(i+1))/2;
+      quadPts(mx,my,mr,cx,cy,cr,bx,by,br,STEP_PT,d0); mx=bx; my=by; mr=br;
+    }
+    const lx=p[(n-1)*3], ly=p[(n-1)*3+1], lr=R(n-1);
+    quadPts(mx,my,mr,(mx+lx)/2,(my+ly)/2,(mr+lr)/2,lx,ly,lr,STEP_PT,d0);
+  }
+  const d=[];
+  for (let i=0;i<d0.length;i+=3){ const l=d.length;
+    if (l && Math.hypot(d0[i]-d[l-3],d0[i+1]-d[l-2])<1e-3){ if (d0[i+2]>d[l-1]) d[l-1]=d0[i+2]; continue; }
+    d.push(d0[i],d0[i+1],d0[i+2]); }
+  return d;
+}
 function penPolygon(s){
   if (s.poly) return s.poly;
-  const p=s.pts, n=p.length/3, base=s.w/2, out=[];
-  const rad = i => base*(0.3 + 1.2*p[i*3+2]);
-  if (n===1){ const r=rad(0); for(let k=0;k<14;k++){ const a=k/14*Math.PI*2; out.push(p[0]+Math.cos(a)*r, p[1]+Math.sin(a)*r);} }
+  const d=centerline(s), m=d.length/3, out=[];
+  if (m===1){ const r=d[2]; for (let k=0;k<16;k++){ const a=k/16*Math.PI*2; out.push(d[0]+Math.cos(a)*r, d[1]+Math.sin(a)*r); } }
   else {
-    const L=[], R=[]; let a0=0, aN=0;
-    for (let i=0;i<n;i++){
-      const ia=Math.max(0,i-2), ib=Math.min(n-1,i+2);
-      let dx=p[ib*3]-p[ia*3], dy=p[ib*3+1]-p[ia*3+1]; const len=Math.hypot(dx,dy);
+    const L=[], Rr=[]; let a0=0, aN=0;
+    for (let i=0;i<m;i++){
+      const ia=Math.max(0,i-2), ib=Math.min(m-1,i+2);
+      let dx=d[ib*3]-d[ia*3], dy=d[ib*3+1]-d[ia*3+1]; const len=Math.hypot(dx,dy);
       if (len<1e-6){ dx=1; dy=0; } else { dx/=len; dy/=len; }
-      if (i===0) a0=Math.atan2(dy,dx); if (i===n-1) aN=Math.atan2(dy,dx);
-      const r=rad(i), x=p[i*3], y=p[i*3+1];
-      L.push(x-dy*r, y+dx*r); R.push(x+dy*r, y-dx*r);
+      if (i===0) a0=Math.atan2(dy,dx); if (i===m-1) aN=Math.atan2(dy,dx);
+      const r=d[i*3+2], x=d[i*3], y=d[i*3+1];
+      L.push(x-dy*r, y+dx*r); Rr.push(x+dy*r, y-dx*r);
     }
     for (let i=0;i<L.length;i++) out.push(L[i]);
-    { const i=n-1, r=rad(i), x=p[i*3], y=p[i*3+1]; for(let t=1;t<8;t++){ const a=aN+Math.PI/2-Math.PI*t/8; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r);} }
-    for (let i=R.length-2;i>=0;i-=2) out.push(R[i],R[i+1]);
-    { const r=rad(0), x=p[0], y=p[1]; for(let t=1;t<8;t++){ const a=a0-Math.PI/2-Math.PI*t/8; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r);} }
+    { const i=m-1, r=d[i*3+2], x=d[i*3], y=d[i*3+1]; for (let t=1;t<10;t++){ const a=aN+Math.PI/2-Math.PI*t/10; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r); } }
+    for (let i=Rr.length-2;i>=0;i-=2) out.push(Rr[i],Rr[i+1]);
+    { const r=d[2], x=d[0], y=d[1]; for (let t=1;t<10;t++){ const a=a0-Math.PI/2-Math.PI*t/10; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r); } }
   }
-  if (s.done) s.poly=out;
-  return out;
+  const arr=new Float32Array(out); if (s.done) s.poly=arr; return arr;
 }
 function drawStroke(ctx, s, dx=0, dy=0){
-  const p=s.pts;
+  const p=s.pts, n=p.length/3;
   if (s.tool==='hl'){
     ctx.save(); ctx.globalAlpha=HL_ALPHA; ctx.strokeStyle=s.color; ctx.lineWidth=s.w; ctx.lineCap='round'; ctx.lineJoin='round';
     ctx.beginPath(); ctx.moveTo(p[0]+dx,p[1]+dy);
-    if (p.length===3) ctx.lineTo(p[0]+dx+0.01,p[1]+dy);
-    for (let i=3;i<p.length;i+=3) ctx.lineTo(p[i]+dx,p[i+1]+dy);
+    if (n===1) ctx.lineTo(p[0]+dx+0.01,p[1]+dy);
+    else {
+      for (let i=1;i<n-1;i++) ctx.quadraticCurveTo(p[i*3]+dx, p[i*3+1]+dy, (p[i*3]+p[i*3+3])/2+dx, (p[i*3+1]+p[i*3+4])/2+dy);
+      ctx.lineTo(p[(n-1)*3]+dx, p[(n-1)*3+1]+dy);
+    }
     ctx.stroke(); ctx.restore(); return;
   }
   const poly=penPolygon(s);
@@ -407,12 +438,49 @@ function scheduleHiRes(){ clearTimeout(hiResT); hiResT=setTimeout(()=>{ requestR
 function attachLive(p){
   const k=cssK(), cw=p.w*k, ch=p.h*k, r=res(cw,ch);
   const W=Math.round(cw*r), H=Math.round(ch*r);
-  if (live.parentNode!==p.el) p.el.appendChild(live);
+  if (live.parentNode!==p.el){ p.el.appendChild(live); p.el.appendChild(tipc); }
   if (live.width!==W || live.height!==H){ live.width=W; live.height=H; }
+  if (tipc.width!==W || tipc.height!==H){ tipc.width=W; tipc.height=H; tipBox=null; }
+  live.style.opacity=1; tipc.style.opacity=1;
   livePage=p; clearLive();
 }
-function clearLive(){ lctx.setTransform(1,0,0,1,0,0); lctx.clearRect(0,0,live.width,live.height); }
+function clearLive(){
+  lctx.setTransform(1,0,0,1,0,0); lctx.clearRect(0,0,live.width,live.height);
+  if (tipBox){ tctx.setTransform(1,0,0,1,0,0); tctx.clearRect(0,0,tipc.width,tipc.height); tipBox=null; }
+}
 function liveScale(){ return live.width/livePage.w; }
+// 太さの異なる丸端の線分を並べて描く（書いている最中に、増えた分だけを足していく）
+function paintCaps(ctx, ls, s, from, out){
+  ctx.setTransform(ls,0,0,ls,0,0); ctx.strokeStyle=s.color; ctx.lineCap='round'; ctx.lineJoin='round';
+  let px=from[0], py=from[1], pr=from[2];
+  for (let i=0;i<out.length;i+=3){
+    const x=out[i], y=out[i+1], r=out[i+2];
+    ctx.lineWidth=Math.max(0.15, pr+r); ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(x,y); ctx.stroke();
+    px=x; py=y; pr=r;
+  }
+}
+function commitSeg(c, j){      // 入力点 j が来たので、点 j-1 を制御点とする曲線を確定部分に足す
+  const s=c.stroke, p=s.pts, ls=liveScale();
+  const cx=p[(j-1)*3], cy=p[(j-1)*3+1], cr=srad(s,p[(j-1)*3+2]);
+  const bx=(cx+p[j*3])/2, by=(cy+p[j*3+1])/2, br=(cr+srad(s,p[j*3+2]))/2;
+  const out=[]; quadPts(c.cm[0],c.cm[1],c.cm[2], cx,cy,cr, bx,by,br, Math.max(0.12,1.2/ls), out);
+  paintCaps(lctx, ls, s, c.cm, out); c.cm=[bx,by,br];
+}
+function resetInk(c){          // 確定部分を最初から描き直す（つなぎ直し・直線補正のとき）
+  clearLive(); const s=c.stroke, p=s.pts, n=p.length/3;
+  live.style.opacity = s.tool==='hl' ? HL_ALPHA : 1;
+  c.cm=[p[0],p[1],srad(s,p[2])];
+  for (let j=2;j<n;j++) commitSeg(c, j);
+}
+function drawTip(c, list){     // 先端（確定部分の終点〜ペン先）を小さな層に描く。前回描いた範囲だけを消す
+  const ls=liveScale(), s=c.stroke;
+  if (tipBox){ tctx.setTransform(1,0,0,1,0,0); tctx.clearRect(tipBox[0],tipBox[1],tipBox[2]-tipBox[0],tipBox[3]-tipBox[1]); }
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,mr=0;
+  for (const q of list){ x0=Math.min(x0,q[0]); y0=Math.min(y0,q[1]); x1=Math.max(x1,q[0]); y1=Math.max(y1,q[1]); mr=Math.max(mr,q[2]); }
+  paintCaps(tctx, ls, s, list[0], list.length>1 ? [].concat(...list.slice(1)) : [list[0][0],list[0][1],list[0][2]]);
+  const pad=mr*ls+3;
+  tipBox=[Math.max(0,Math.floor(x0*ls-pad)), Math.max(0,Math.floor(y0*ls-pad)), Math.min(tipc.width,Math.ceil(x1*ls+pad)), Math.min(tipc.height,Math.ceil(y1*ls+pad))];
+}
 
 /* ---------- selection ---------- */
 let sel=null;
@@ -452,12 +520,13 @@ function redo(){ const a=redoStack.pop(); if(!a) return; clearSel(); applyA(a,1)
 function setStrokes(p, next){ const before=p.strokes.slice(); p.strokes=next; pushAction({t:'set', p, before, after:next.slice()}); }
 
 /* ---------- drawing input ---------- */
-let cur=null, tp=null;
+let cur=null, tp=null, lastInk=null, penUntil=0;
 function pressureOf(e){ return e.pointerType==='pen' ? (e.pressure>0 ? e.pressure : 0.35) : 0.5; }
 function localPt(e){ return [(e.clientX-cur.rect.left)/cur.k, (e.clientY-cur.rect.top)/cur.k]; }
 
 pagesEl.addEventListener('pointerdown', e => {
   if (e.pointerType==='mouse' && e.button!==0) return;
+  if (e.pointerType==='pen') penUntil=performance.now()+600;
   if (e.pointerType==='pen' && !st.pencilSeen){
     st.pencilSeen=true;
     if (!st.pencilOnly){ st.pencilOnly=true; syncUI(); toast('Apple Pencilを検出しました。指はスクロールとズームに使えます'); }
@@ -475,9 +544,23 @@ pagesEl.addEventListener('pointerdown', e => {
     if (sel) clearSel();
     attachLive(p);
     const pr=pressureOf(e);
-    cur.mode='ink'; cur.pr=pr; cur.anchor=[x,y];
-    cur.stroke={ id:uid(), tool:st.tool, color:(st.tool==='pen'?PEN_COLORS:HL_COLORS)[st.color[st.tool]][0],
-                 w:SIZES[st.tool][st.size[st.tool]], pts:[x,y,pr] };
+    cur.mode='ink'; cur.pr=pr; cur.anchor=[x,y]; cur.pred=null;
+    const li=lastInk; let rejoin=false;
+    if (li && li.cancelled && e.pointerType==='pen' && li.p===p && performance.now()-li.t<350 && li.tool===st.tool
+        && Math.hypot(x-li.x, y-li.y)*cur.k<60 && p.strokes[p.strokes.length-1]===li.stroke){
+      const a=undoStack[undoStack.length-1];
+      if (a && a.t==='set' && a.p===p && a.after[a.after.length-1]===li.stroke){ rejoin=true; undoStack.pop(); }
+    }
+    if (rejoin){          // ブラウザが入力を取り消して途切れた直後に書き始めた線は、前の線の続きとしてつなぐ
+      p.strokes=p.strokes.slice(0,-1); redrawInk(p);
+      const o=li.stroke; cur.stroke={ id:uid(), tool:o.tool, color:o.color, w:o.w, pts:o.pts.slice() };
+      cur.stroke.pts.push(x,y,pr); resetInk(cur);
+    } else {
+      cur.stroke={ id:uid(), tool:st.tool, color:(st.tool==='pen'?PEN_COLORS:HL_COLORS)[st.color[st.tool]][0],
+                   w:SIZES[st.tool][st.size[st.tool]], pts:[x,y,pr] };
+      cur.cm=[x,y,srad(cur.stroke,pr)];
+      live.style.opacity = st.tool==='hl' ? HL_ALPHA : 1;
+    }
     armHold(); drawCur();
   } else if (st.tool==='eraser'){
     if (sel) clearSel();
@@ -491,14 +574,19 @@ pagesEl.addEventListener('pointerdown', e => {
   }
 });
 window.addEventListener('pointermove', e => {
+  if (e.pointerType==='pen') penUntil=performance.now()+600;
   if (!cur || e.pointerId!==cur.id) return;
-  let evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+  let evs=[]; try { evs = e.getCoalescedEvents ? e.getCoalescedEvents() : []; } catch(_){}
   if (!evs.length) evs=[e];
   for (const ev of evs) addPoint(ev);
+  if (cur.mode==='ink' && cur.stroke.tool==='pen'){      // 数ミリ秒先の予測位置まで先端を伸ばして遅れを減らす
+    cur.pred=null;
+    try { const pe=e.getPredictedEvents ? e.getPredictedEvents() : []; if (pe.length){ const q=localPt(pe[Math.min(1,pe.length-1)]); cur.pred=q; } } catch(_){}
+  }
   drawCur();
 });
 window.addEventListener('pointerup', e => { if (cur && e.pointerId===cur.id) finish(false); });
-window.addEventListener('pointercancel', e => { if (cur && e.pointerId===cur.id) finish(e.pointerType==='touch'); });
+window.addEventListener('pointercancel', e => { if (cur && e.pointerId===cur.id){ cur.cancelled=true; finish(e.pointerType==='touch'); } });
 
 function armHold(){ clearTimeout(cur.holdT); const c=cur; cur.holdT=setTimeout(()=>straighten(c), 520); }
 function straighten(c){
@@ -509,6 +597,7 @@ function straighten(c){
   let avg=0; for(let i=0;i<n;i++) avg+=p[i*3+2]; avg/=n;
   c.stroke.straight=true;
   c.stroke.pts=[p[0],p[1],avg, p[(n-1)*3],p[(n-1)*3+1],avg];
+  clearLive(); live.style.opacity = c.stroke.tool==='hl' ? HL_ALPHA : 1; c.cm=[p[0],p[1],srad(c.stroke,avg)];
   drawCur();
 }
 function addPoint(ev){
@@ -517,9 +606,10 @@ function addPoint(ev){
     const s=cur.stroke, p=s.pts;
     if (s.straight){ p[3]=x; p[4]=y; return; }
     const lx=p[p.length-3], ly=p[p.length-2];
-    if (Math.hypot(x-lx,y-ly)*cur.k < 0.6) return;
-    cur.pr = cur.pr*0.6 + pressureOf(ev)*0.4;
+    if (Math.hypot(x-lx,y-ly)*cur.k < 0.05) return;       // 同じ位置の重複だけ省く（細かい動きは捨てない）
+    cur.pr = cur.pr*0.55 + pressureOf(ev)*0.45;
     p.push(x,y,cur.pr);
+    if (p.length/3>=3) commitSeg(cur, p.length/3-1);
     if (Math.hypot(x-cur.anchor[0], y-cur.anchor[1])*cur.k > 4){ cur.anchor=[x,y]; armHold(); }
   } else if (cur.mode==='erase'){
     eraseSeg(cur.last[0],cur.last[1],x,y); cur.last=[x,y];
@@ -549,7 +639,16 @@ function strokeHit(s,x,y,r){
 function drawCur(){
   if (!cur) return;
   const ls=liveScale(), px=1/cssK();
-  if (cur.mode==='ink'){ clearLive(); lctx.setTransform(ls,0,0,ls,0,0); drawStroke(lctx, cur.stroke); }
+  if (cur.mode==='ink'){
+    const s=cur.stroke, p=s.pts, n=p.length/3;
+    if (s.tool==='hl'){
+      if (s.straight){ clearLive(); live.style.opacity=HL_ALPHA; paintCaps(lctx, ls, s, [p[0],p[1],s.w/2], [p[3],p[4],s.w/2]); }
+      return;
+    }
+    const lastPt=[p[(n-1)*3], p[(n-1)*3+1], srad(s,p[(n-1)*3+2])];
+    const list=[cur.cm, lastPt]; if (cur.pred && !s.straight) list.push([cur.pred[0],cur.pred[1],lastPt[2]]);
+    drawTip(cur, list);
+  }
   else if (cur.mode==='erase'){
     clearLive(); lctx.setTransform(ls,0,0,ls,0,0);
     lctx.beginPath(); lctx.arc(cur.last[0],cur.last[1],cur.r,0,Math.PI*2);
@@ -565,11 +664,13 @@ function finish(discard){
   const c=cur; cur=null; clearTimeout(c.holdT);
   const p=c.p;
   if (c.mode==='ink'){
-    clearLive();
+    clearLive(); live.style.opacity=1;
     if (discard) return;
-    const s=c.stroke; s.pts=smoothPts(s.pts); s.done=true; delete s.straight;
+    const s=c.stroke; delete s.straight;
+    s.pts=s.pts.map((v,i)=> i%3===2 ? Math.round(v*1000)/1000 : Math.round(v*100)/100); s.done=true;
     const before=p.strokes.slice(); p.strokes=p.strokes.concat([s]);
     pushAction({t:'set', p, before, after:p.strokes.slice()});
+    lastInk={ p, stroke:s, tool:s.tool, t:performance.now(), cancelled:!!c.cancelled, x:s.pts[s.pts.length-3], y:s.pts[s.pts.length-2] };
     if (p.inkCanvas.width){ const ctx=p.inkCanvas.getContext('2d'), k=p.inkCanvas.width/p.w; ctx.setTransform(k,0,0,k,0,0); drawStroke(ctx,s); }
   } else if (c.mode==='erase'){
     clearLive();
@@ -600,18 +701,24 @@ function cancelTouchStroke(){
 
 /* ---------- touch: palm rejection, pinch, multi-finger taps ---------- */
 let tap=null;
-const fingers = list => [...list].filter(t => t.touchType!=='stylus');
+const PALM_R=28;                       // 接触の半径がこれより大きいタッチは手のひらとみなす（CSS px）
+const isPalm=t=>Math.max(t.radiusX||0, t.radiusY||0)>PALM_R;
+const fingers = list => [...list].filter(t => t.touchType!=='stylus' && !isPalm(t));
 function startPinch(fs){
   const r=scroller.getBoundingClientRect();
   const cx=(fs[0].clientX+fs[1].clientX)/2, cy=(fs[0].clientY+fs[1].clientY)/2;
   tp={ ids:[fs[0].identifier, fs[1].identifier], d0:Math.hypot(fs[0].clientX-fs[1].clientX, fs[0].clientY-fs[1].clientY)||1,
-       z0:st.zoom, ox:cx-r.left, oy:cy-r.top, sl0:scroller.scrollLeft, st0:scroller.scrollTop, r };
+       c0:[cx,cy], armed:false, z0:st.zoom, ox:cx-r.left, oy:cy-r.top, sl0:scroller.scrollLeft, st0:scroller.scrollTop, r };
 }
 let pinchRaf=0, pinchLast=null;
 function updatePinch(e){
   const a=[...e.touches].find(t=>t.identifier===tp.ids[0]), b=[...e.touches].find(t=>t.identifier===tp.ids[1]);
   if (!a||!b) return;
   pinchLast={ d:Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY), cx:(a.clientX+b.clientX)/2, cy:(a.clientY+b.clientY)/2 };
+  if (!tp.armed){      // 置いただけの手のひらで拡大や移動が起きないよう、14px動くまで待つ
+    if (Math.abs(pinchLast.d-tp.d0)<14 && Math.hypot(pinchLast.cx-tp.c0[0], pinchLast.cy-tp.c0[1])<14) return;
+    tp.armed=true;
+  }
   if (pinchRaf) return;
   pinchRaf=requestAnimationFrame(()=>{
     pinchRaf=0; if (!tp||!pinchLast) return;
@@ -624,25 +731,32 @@ function updatePinch(e){
 }
 scroller.addEventListener('touchstart', e => {
   const now=performance.now();
-  if (!tap) tap={ t0:now, max:0, moved:false, pos:new Map() };
-  for (const t of e.changedTouches) if (t.touchType!=='stylus') tap.pos.set(t.identifier,[t.clientX,t.clientY]);
+  const stylus=[...e.touches].some(t=>t.touchType==='stylus');
+  const palm=[...e.changedTouches].some(t=>t.touchType!=='stylus' && isPalm(t));
+  if (!tap) tap={ t0:now, max:0, moved:false, bad:false, minSep:1e9, pos:new Map() };
+  if (stylus || palm || now<penUntil){      // ペンを使っている最中・手のひらの接触は、スクロールも拡大も取り消しも起こさない
+    tap.bad=true; if (stylus && tp){ tp=null; scheduleHiRes(); }
+    if (e.cancelable) e.preventDefault(); return;
+  }
+  for (const t of e.changedTouches) tap.pos.set(t.identifier,[t.clientX,t.clientY]);
   const fs=fingers(e.touches);
   tap.max=Math.max(tap.max, fs.length);
-  if ([...e.touches].some(t=>t.touchType==='stylus')){ if (e.cancelable) e.preventDefault(); tap=null; return; }
+  for (let i=0;i<fs.length;i++) for (let j=i+1;j<fs.length;j++) tap.minSep=Math.min(tap.minSep, Math.hypot(fs[i].clientX-fs[j].clientX, fs[i].clientY-fs[j].clientY));
   if (fs.length>=2){ if (e.cancelable) e.preventDefault(); cancelTouchStroke(); if (!tp) startPinch(fs); }
   else if (fs.length===1 && !st.pencilOnly && e.target.closest('.page')){ if (e.cancelable) e.preventDefault(); }
 }, { passive:false });
 scroller.addEventListener('touchmove', e => {
   if (tap) for (const t of e.changedTouches){ const s=tap.pos.get(t.identifier); if (s && Math.hypot(t.clientX-s[0], t.clientY-s[1])>12) tap.moved=true; }
   if (tp){ if (e.cancelable) e.preventDefault(); updatePinch(e); return; }
-  if ([...e.touches].some(t=>t.touchType==='stylus') || (cur && cur.type==='touch')){ if (e.cancelable) e.preventDefault(); }
+  if ([...e.touches].some(t=>t.touchType==='stylus') || (cur && cur.type==='touch') || performance.now()<penUntil){ if (e.cancelable) e.preventDefault(); }
 }, { passive:false });
 function touchEnd(e){
   const fs=fingers(e.touches);
   if (tp && fs.length<2){ tp=null; scheduleHiRes(); }
   if (e.touches.length===0 && tap){
     const dt=performance.now()-tap.t0;
-    if (!tap.moved && dt<380){ if (tap.max===2){ undo(); toast('取り消しました',1200); } else if (tap.max===3){ redo(); toast('やり直しました',1200); } }
+    if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36 && performance.now()>=penUntil+200){
+      if (tap.max===2){ undo(); toast('取り消しました',1200); } else if (tap.max===3){ redo(); toast('やり直しました',1200); } }
     tap=null;
   }
 }
@@ -788,7 +902,7 @@ $('#addpage').onclick=()=>{
 
 /* ---------- open / new ---------- */
 function resetView(){
-  clearSel(); if (live.parentNode) live.remove(); livePage=null;
+  clearSel(); if (live.parentNode) live.remove(); tipc.remove(); tipBox=null; livePage=null;
   for (const p of D.pages){ freePage(p); }
   undoStack=[]; redoStack=[]; st.zoom=1; scroller.scrollTop=0; scroller.scrollLeft=0;
 }
@@ -891,8 +1005,13 @@ $('#export').onclick=async()=>{
       }
       for (const s of p.strokes){
         if (s.tool==='hl'){
-          let d=''; for (let i=0;i<s.pts.length;i+=3){ const [a,b]=toPdf(p,s.pts[i],s.pts[i+1]); d+=(i?'L':'M')+f2(a)+' '+f2(b)+' '; }
-          if (s.pts.length===3){ const [a,b]=toPdf(p,s.pts[0]+.05,s.pts[1]); d+='L'+f2(a)+' '+f2(b); }
+          const q=s.pts, nq=q.length/3, T=i=>toPdf(p,q[i*3],q[i*3+1]);
+          let d='M'+T(0).map(f2).join(' ')+' ';
+          if (nq===1){ const [a,b]=toPdf(p,q[0]+.05,q[1]); d+='L'+f2(a)+' '+f2(b); }
+          else {
+            for (let i=1;i<nq-1;i++){ const c=T(i), e2=toPdf(p,(q[i*3]+q[i*3+3])/2,(q[i*3+1]+q[i*3+4])/2); d+='Q'+c.map(f2).join(' ')+' '+e2.map(f2).join(' ')+' '; }
+            d+='L'+T(nq-1).map(f2).join(' ');
+          }
           page.drawSvgPath(d,{ x:0, y:0, borderColor:hexRgb(s.color), borderWidth:s.w, borderOpacity:HL_ALPHA, borderLineCap:LineCapStyle.Round });
         } else {
           const poly=penPolygon(s); let d='';
@@ -1107,7 +1226,7 @@ function joinPath(dir, t){
 const kid=(el,n)=>{ if (!el) return null; for (const c of el.children) if (c.nodeName===n) return c; return null; };
 const kids=(el,n)=>el ? [...el.children].filter(c=>c.nodeName===n) : [];
 const first=(el,n)=>el ? el.getElementsByTagName(n)[0]||null : null;
-function hexRgb(h){ h=String(h||'000000').replace('#',''); if (h.length===8) h=h.slice(2); const n=parseInt(h,16)||0; return [(n>>16)&255,(n>>8)&255,n&255]; }
+function hexToArr(h){ h=String(h||'000000').replace('#',''); if (h.length===8) h=h.slice(2); const n=parseInt(h,16)||0; return [(n>>16)&255,(n>>8)&255,n&255]; }
 function rgb2hsl([r,g,b]){ r/=255; g/=255; b/=255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b); let h=0,s=0; const l=(mx+mn)/2;
   if (mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn);
     h = mx===r ? (g-b)/d+(g<b?6:0) : mx===g ? (b-r)/d+2 : (r-g)/d+4; h/=6; } return [h,s,l]; }
@@ -1172,7 +1291,7 @@ async function renderPptx(buf, prog){
       else if (c.nodeName==='a:schemeClr') hex=theme[clrMap[v]||v]||theme[v]||'000000';
       else if (c.nodeName==='a:sysClr') hex=c.getAttribute('lastClr')||(v==='window'?'FFFFFF':'000000');
       else if (c.nodeName==='a:prstClr') hex=({white:'FFFFFF',black:'000000',red:'FF0000',blue:'0000FF',green:'008000',yellow:'FFFF00',gray:'808080'})[v]||'000000';
-      let rgb=hexRgb(hex), a=1;
+      let rgb=hexToArr(hex), a=1;
       for (const m of c.children){ const val=(+m.getAttribute('val'))/100000;
         if (m.nodeName==='a:lumMod'){ const [h,s,l]=rgb2hsl(rgb); rgb=hsl2rgb(h,s,Math.min(1,l*val)); }
         else if (m.nodeName==='a:lumOff'){ const [h,s,l]=rgb2hsl(rgb); rgb=hsl2rgb(h,s,Math.min(1,l+val)); }
