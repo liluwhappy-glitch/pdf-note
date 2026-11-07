@@ -100,6 +100,13 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 .sz::before{content:"";width:var(--d);height:var(--d);border-radius:50%;background:var(--ink);opacity:.75}
 .sz[aria-pressed="true"]{background:var(--accent-soft)}
 .sz[aria-pressed="true"]::before{background:var(--accent);opacity:1}
+.wslider{display:flex;flex-direction:column;gap:8px;width:250px;max-width:calc(100vw - 72px)}
+.wprev{height:44px;display:flex;align-items:center;justify-content:center;background:var(--paper);border:1px solid var(--line);border-radius:10px}
+.wprev span{display:block;width:70%;border-radius:999px}
+.wrow{display:flex;align-items:center;gap:8px}
+.wend{font-size:11px;color:var(--muted)}
+#wrange{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--accent)}
+.wval{font-family:var(--f-num);font-size:12px;min-width:58px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
 
 #scroller{position:absolute;inset:0;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain}
 #pages{position:relative;display:flex;flex-direction:column;align-items:center;gap:20px;min-width:100%;width:max-content;box-sizing:border-box;
@@ -187,7 +194,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 
   <div id="pop" hidden>
     <div id="popcol"><div class="lbl">色</div><div class="swatches" id="swatches"></div></div>
-    <div><div class="lbl">太さ</div><div class="sizes" id="sizes"></div></div>
+    <div><div class="lbl" id="sizelbl">太さ</div><div class="sizes" id="sizes"></div></div>
   </div>
   <div id="dockhint" hidden></div>
 </div>
@@ -236,18 +243,25 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const PEN_COLORS = [['#1c1c1e','黒'],['#1f4fd1','青'],['#d6322b','赤'],['#1f8a4c','緑'],['#e07a00','オレンジ']];
 const HL_COLORS  = [['#ffd400','黄'],['#6fe05c','緑'],['#ff6fb0','ピンク'],['#5cc4ff','水色'],['#ffa53a','オレンジ']];
 const SIZES = { pen:[0.5,1,2], hl:[7,12,18], eraser:[5,12,24] };   // pt
+const WRANGE = { pen:[0.28, 8.5], hl:[4.25, 28.3] };                 // 太さの範囲 pt（ペン0.1〜3.0mm、マーカー1.5〜10mm）
+const PT_MM = 0.3528;
 const HL_ALPHA = 0.38;
 const ZMIN = 0.5, ZMAX = 4;
 const SEL_COLOR = '#2457d6';
 
-const st = { tool:'pen', color:{pen:0, hl:0}, size:{pen:1, hl:1, eraser:1},
+const st = { tool:'pen', color:{pen:0, hl:0}, size:{pen:1, hl:1, eraser:1}, width:{ pen:1, hl:12 },
              pencilOnly:false, pencilSeen:false, zoom:1, fit:1 };
+try { const w=JSON.parse(localStorage.getItem('akanib-width')||'null');
+  if (w) for (const t of ['pen','hl']) if (typeof w[t]==='number') st.width[t]=Math.min(WRANGE[t][1], Math.max(WRANGE[t][0], w[t])); } catch(e){}
 const D = { name:'', bytes:null, pdf:null, pages:[] };
 let undoStack = [], redoStack = [];
 let uidN = Math.floor(Math.random()*1e6);
 const uid = () => (++uidN).toString(36) + Date.now().toString(36).slice(-3);
 
 const scroller = $('#scroller'), pagesEl = $('#pages');
+const pinchSpacer = document.createElement('div');   // 拡大縮小の途中でスクロール範囲が縮まないようにする
+pinchSpacer.style.cssText='position:absolute;left:0;top:0;width:1px;height:1px;pointer-events:none;visibility:hidden';
+scroller.appendChild(pinchSpacer);
 const live = document.createElement('canvas'); live.className = 'live';
 const lctx = live.getContext('2d');
 const tipc = document.createElement('canvas'); tipc.className = 'live';   // 書いている先端だけを描く小さな層
@@ -283,16 +297,16 @@ function quadPts(ax,ay,ar,cx,cy,cr,bx,by,br,step,out){
     out.push(u*u*ax+2*u*t*cx+t*t*bx, u*u*ay+2*u*t*cy+t*t*by, u*u*ar+2*u*t*cr+t*t*br); }
 }
 // 入力点の中点どうしをつなぐなめらかな中心線（書いている最中も確定後も同じ形）
-function centerline(s){
+function centerline(s, step=STEP_PT){
   const p=s.pts, n=p.length/3, R=i=>srad(s,p[i*3+2]), d0=[p[0],p[1],R(0)];
   if (n>1){
     let mx=p[0],my=p[1],mr=R(0);
     for (let i=1;i<n-1;i++){
       const cx=p[i*3],cy=p[i*3+1],cr=R(i), bx=(cx+p[i*3+3])/2, by=(cy+p[i*3+4])/2, br=(cr+R(i+1))/2;
-      quadPts(mx,my,mr,cx,cy,cr,bx,by,br,STEP_PT,d0); mx=bx; my=by; mr=br;
+      quadPts(mx,my,mr,cx,cy,cr,bx,by,br,step,d0); mx=bx; my=by; mr=br;
     }
     const lx=p[(n-1)*3], ly=p[(n-1)*3+1], lr=R(n-1);
-    quadPts(mx,my,mr,(mx+lx)/2,(my+ly)/2,(mr+lr)/2,lx,ly,lr,STEP_PT,d0);
+    quadPts(mx,my,mr,(mx+lx)/2,(my+ly)/2,(mr+lr)/2,lx,ly,lr,step,d0);
   }
   const d=[];
   for (let i=0;i<d0.length;i+=3){ const l=d.length;
@@ -300,26 +314,24 @@ function centerline(s){
     d.push(d0[i],d0[i+1],d0[i+2]); }
   return d;
 }
-function penPolygon(s){
-  if (s.poly) return s.poly;
-  const d=centerline(s), m=d.length/3, out=[];
-  if (m===1){ const r=d[2]; for (let k=0;k<16;k++){ const a=k/16*Math.PI*2; out.push(d[0]+Math.cos(a)*r, d[1]+Math.sin(a)*r); } }
-  else {
-    const L=[], Rr=[]; let a0=0, aN=0;
-    for (let i=0;i<m;i++){
-      const ia=Math.max(0,i-2), ib=Math.min(m-1,i+2);
-      let dx=d[ib*3]-d[ia*3], dy=d[ib*3+1]-d[ia*3+1]; const len=Math.hypot(dx,dy);
-      if (len<1e-6){ dx=1; dy=0; } else { dx/=len; dy/=len; }
-      if (i===0) a0=Math.atan2(dy,dx); if (i===m-1) aN=Math.atan2(dy,dx);
-      const r=d[i*3+2], x=d[i*3], y=d[i*3+1];
-      L.push(x-dy*r, y+dx*r); Rr.push(x+dy*r, y-dx*r);
-    }
-    for (let i=0;i<L.length;i++) out.push(L[i]);
-    { const i=m-1, r=d[i*3+2], x=d[i*3], y=d[i*3+1]; for (let t=1;t<10;t++){ const a=aN+Math.PI/2-Math.PI*t/10; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r); } }
-    for (let i=Rr.length-2;i>=0;i-=2) out.push(Rr[i],Rr[i+1]);
-    { const r=d[2], x=d[0], y=d[1]; for (let t=1;t<10;t++){ const a=a0-Math.PI/2-Math.PI*t/10; out.push(x+Math.cos(a)*r, y+Math.sin(a)*r); } }
+// ペンの線は「輪郭を作って塗る」のではなく、太さごとにまとめた丸端の線を重ねて描く。
+// 往復した線やペン先のぶれがあっても、輪郭がねじれて中が抜ける（二重に見える）ことがない。
+function strokeRuns(s, step=STEP_PT){
+  const d=centerline(s, step), m=d.length/3, runs=[];
+  if (m===1){ runs.push({ w:Math.max(0.12, d[2]*2), pts:[d[0],d[1],d[0]+0.01,d[1]] }); return runs; }
+  let run=null;
+  for (let i=0;i<m-1;i++){
+    const w=Math.max(0.12, Math.round((d[i*3+2]+d[i*3+5])/0.025)*0.025);
+    if (!run || run.w!==w){ run={ w, pts:[d[i*3],d[i*3+1]] }; runs.push(run); }
+    run.pts.push(d[i*3+3],d[i*3+4]);
   }
-  const arr=new Float32Array(out); if (s.done) s.poly=arr; return arr;
+  return runs;
+}
+function penPaths(s){
+  if (s.paths) return s.paths;
+  const out=strokeRuns(s).map(r=>{ const P=new Path2D(); P.moveTo(r.pts[0],r.pts[1]); for (let i=2;i<r.pts.length;i+=2) P.lineTo(r.pts[i],r.pts[i+1]); return { w:r.w, P }; });
+  if (s.done) s.paths=out;
+  return out;
 }
 function drawStroke(ctx, s, dx=0, dy=0){
   const p=s.pts, n=p.length/3;
@@ -333,12 +345,13 @@ function drawStroke(ctx, s, dx=0, dy=0){
     }
     ctx.stroke(); ctx.restore(); return;
   }
-  const poly=penPolygon(s);
-  ctx.fillStyle=s.color; ctx.beginPath(); ctx.moveTo(poly[0]+dx,poly[1]+dy);
-  for (let i=2;i<poly.length;i+=2) ctx.lineTo(poly[i]+dx,poly[i+1]+dy);
-  ctx.closePath(); ctx.fill();
+  ctx.save(); if (dx||dy) ctx.translate(dx,dy);
+  ctx.strokeStyle=s.color; ctx.lineCap='round'; ctx.lineJoin='round';
+  for (const r of penPaths(s)){ ctx.lineWidth=r.w; ctx.stroke(r.P); }
+  ctx.restore();
 }
-function smoothPts(pts){
+
+function smoothPts(pts){       // サンプル図面の手書き例で使う
   const n=pts.length/3; let a=pts.slice();
   if (n>=3) for (let pass=0;pass<2;pass++){ const b=a.slice();
     for (let i=1;i<n-1;i++) for (let k=0;k<3;k++) b[i*3+k]=a[(i-1)*3+k]*.25+a[i*3+k]*.5+a[(i+1)*3+k]*.25; a=b; }
@@ -526,7 +539,7 @@ function localPt(e){ return [(e.clientX-cur.rect.left)/cur.k, (e.clientY-cur.rec
 
 pagesEl.addEventListener('pointerdown', e => {
   if (e.pointerType==='mouse' && e.button!==0) return;
-  if (e.pointerType==='pen') penUntil=performance.now()+600;
+  if (e.pointerType==='pen') penUntil=performance.now()+400;
   if (e.pointerType==='pen' && !st.pencilSeen){
     st.pencilSeen=true;
     if (!st.pencilOnly){ st.pencilOnly=true; syncUI(); toast('Apple Pencilを検出しました。指はスクロールとズームに使えます'); }
@@ -544,10 +557,10 @@ pagesEl.addEventListener('pointerdown', e => {
     if (sel) clearSel();
     attachLive(p);
     const pr=pressureOf(e);
-    cur.mode='ink'; cur.pr=pr; cur.anchor=[x,y]; cur.pred=null;
+    cur.mode='ink'; cur.pr=pr; cur.anchor=[x,y]; cur.pred=null; cur.sm=[x,y]; cur.raw=[x,y];
     const li=lastInk; let rejoin=false;
-    if (li && li.cancelled && e.pointerType==='pen' && li.p===p && performance.now()-li.t<350 && li.tool===st.tool
-        && Math.hypot(x-li.x, y-li.y)*cur.k<60 && p.strokes[p.strokes.length-1]===li.stroke){
+    if (li && li.cancelled && e.pointerType==='pen' && li.p===p && performance.now()-li.t<250 && li.tool===st.tool
+        && Math.hypot(x-li.x, y-li.y)*cur.k<30 && p.strokes[p.strokes.length-1]===li.stroke){
       const a=undoStack[undoStack.length-1];
       if (a && a.t==='set' && a.p===p && a.after[a.after.length-1]===li.stroke){ rejoin=true; undoStack.pop(); }
     }
@@ -557,7 +570,7 @@ pagesEl.addEventListener('pointerdown', e => {
       cur.stroke.pts.push(x,y,pr); resetInk(cur);
     } else {
       cur.stroke={ id:uid(), tool:st.tool, color:(st.tool==='pen'?PEN_COLORS:HL_COLORS)[st.color[st.tool]][0],
-                   w:SIZES[st.tool][st.size[st.tool]], pts:[x,y,pr] };
+                   w:Math.round(st.width[st.tool]*100)/100, pts:[x,y,pr] };
       cur.cm=[x,y,srad(cur.stroke,pr)];
       live.style.opacity = st.tool==='hl' ? HL_ALPHA : 1;
     }
@@ -574,7 +587,7 @@ pagesEl.addEventListener('pointerdown', e => {
   }
 });
 window.addEventListener('pointermove', e => {
-  if (e.pointerType==='pen') penUntil=performance.now()+600;
+  if (e.pointerType==='pen' && (cur || e.buttons)) penUntil=performance.now()+400;   // ペン先を浮かせているだけ（ホバー）は数えない
   if (!cur || e.pointerId!==cur.id) return;
   let evs=[]; try { evs = e.getCoalescedEvents ? e.getCoalescedEvents() : []; } catch(_){}
   if (!evs.length) evs=[e];
@@ -585,15 +598,19 @@ window.addEventListener('pointermove', e => {
   }
   drawCur();
 });
-window.addEventListener('pointerup', e => { if (cur && e.pointerId===cur.id) finish(false); });
+window.addEventListener('pointerup', e => { if (e.pointerType==='pen') penUntil=performance.now()+300; if (cur && e.pointerId===cur.id) finish(false); });
 window.addEventListener('pointercancel', e => { if (cur && e.pointerId===cur.id){ cur.cancelled=true; finish(e.pointerType==='touch'); } });
 
-function armHold(){ clearTimeout(cur.holdT); const c=cur; cur.holdT=setTimeout(()=>straighten(c), 520); }
+function armHold(){ clearTimeout(cur.holdT); const c=cur; cur.holdT=setTimeout(()=>straighten(c), 750); }
 function straighten(c){
   if (cur!==c || c.mode!=='ink' || c.stroke.straight) return;
   const p=c.stroke.pts, n=p.length/3; if (n<4) return;
   const len=Math.hypot(p[(n-1)*3]-p[0], p[(n-1)*3+1]-p[1]);
   if (len*c.k < 24) return;
+  // ほぼまっすぐに引いた線だけを直線にする（曲線や文字の途中で止まっても形は変えない）
+  let dev=0; const ux=(p[(n-1)*3]-p[0])/len, uy=(p[(n-1)*3+1]-p[1])/len;
+  for (let i=1;i<n-1;i++) dev=Math.max(dev, Math.abs((p[i*3]-p[0])*uy-(p[i*3+1]-p[1])*ux));
+  if (dev*c.k > Math.max(6, len*c.k*0.08)) return;
   let avg=0; for(let i=0;i<n;i++) avg+=p[i*3+2]; avg/=n;
   c.stroke.straight=true;
   c.stroke.pts=[p[0],p[1],avg, p[(n-1)*3],p[(n-1)*3+1],avg];
@@ -604,11 +621,15 @@ function addPoint(ev){
   const [x,y]=localPt(ev);
   if (cur.mode==='ink'){
     const s=cur.stroke, p=s.pts;
+    cur.raw=[x,y];
     if (s.straight){ p[3]=x; p[4]=y; return; }
+    // ゆっくり書いたときのペン先の細かなぶれだけを抑える（速く動かしたときは補正しない）
+    const sm=cur.sm, mv=Math.hypot(x-sm[0], y-sm[1])*cur.k, a=Math.min(1, 0.28+mv/4);
+    sm[0]+=(x-sm[0])*a; sm[1]+=(y-sm[1])*a;
+    cur.pr = cur.pr*0.7 + pressureOf(ev)*0.3;
     const lx=p[p.length-3], ly=p[p.length-2];
-    if (Math.hypot(x-lx,y-ly)*cur.k < 0.05) return;       // 同じ位置の重複だけ省く（細かい動きは捨てない）
-    cur.pr = cur.pr*0.55 + pressureOf(ev)*0.45;
-    p.push(x,y,cur.pr);
+    if (Math.hypot(sm[0]-lx,sm[1]-ly)*cur.k < 0.6) return;
+    p.push(sm[0],sm[1],cur.pr);
     if (p.length/3>=3) commitSeg(cur, p.length/3-1);
     if (Math.hypot(x-cur.anchor[0], y-cur.anchor[1])*cur.k > 4){ cur.anchor=[x,y]; armHold(); }
   } else if (cur.mode==='erase'){
@@ -646,7 +667,8 @@ function drawCur(){
       return;
     }
     const lastPt=[p[(n-1)*3], p[(n-1)*3+1], srad(s,p[(n-1)*3+2])];
-    const list=[cur.cm, lastPt]; if (cur.pred && !s.straight) list.push([cur.pred[0],cur.pred[1],lastPt[2]]);
+    const list=[cur.cm, lastPt];
+    if (!s.straight){ if (cur.raw) list.push([cur.raw[0],cur.raw[1],lastPt[2]]); if (cur.pred) list.push([cur.pred[0],cur.pred[1],lastPt[2]]); }
     drawTip(cur, list);
   }
   else if (cur.mode==='erase'){
@@ -666,7 +688,10 @@ function finish(discard){
   if (c.mode==='ink'){
     clearLive(); live.style.opacity=1;
     if (discard) return;
-    const s=c.stroke; delete s.straight;
+    const s=c.stroke;
+    if (!s.straight && c.raw){ const q=s.pts, L=q.length;      // ぶれ補正で少し遅れた分、ペンを離した位置まで線を届かせる
+      if (Math.hypot(c.raw[0]-q[L-3], c.raw[1]-q[L-2])*c.k>0.3) q.push(c.raw[0], c.raw[1], q[L-1]); }
+    delete s.straight;
     s.pts=s.pts.map((v,i)=> i%3===2 ? Math.round(v*1000)/1000 : Math.round(v*100)/100); s.done=true;
     const before=p.strokes.slice(); p.strokes=p.strokes.concat([s]);
     pushAction({t:'set', p, before, after:p.strokes.slice()});
@@ -704,40 +729,64 @@ let tap=null;
 const PALM_R=28;                       // 接触の半径がこれより大きいタッチは手のひらとみなす（CSS px）
 const isPalm=t=>Math.max(t.radiusX||0, t.radiusY||0)>PALM_R;
 const fingers = list => [...list].filter(t => t.touchType!=='stylus' && !isPalm(t));
+function anchorAt(cx,cy){       // 指の間にあるページ上の位置（拡大後もこの位置を指の間に保つ）
+  const X=cx+scroller.scrollLeft, Y=cy+scroller.scrollTop; let best=null, bd=Infinity;
+  for (const p of D.pages){ const el=p.el; if (!el) continue; const t=el.offsetTop, h=el.offsetHeight;
+    const dd = Y<t ? t-Y : Y>t+h ? Y-t-h : 0; if (dd<bd){ bd=dd; best=el; } }
+  return best ? { el:best, fx:(X-best.offsetLeft)/best.offsetWidth, fy:(Y-best.offsetTop)/best.offsetHeight } : null;
+}
 function startPinch(fs){
   const r=scroller.getBoundingClientRect();
-  const cx=(fs[0].clientX+fs[1].clientX)/2, cy=(fs[0].clientY+fs[1].clientY)/2;
+  const cx=(fs[0].clientX+fs[1].clientX)/2-r.left, cy=(fs[0].clientY+fs[1].clientY)/2-r.top;
   tp={ ids:[fs[0].identifier, fs[1].identifier], d0:Math.hypot(fs[0].clientX-fs[1].clientX, fs[0].clientY-fs[1].clientY)||1,
-       c0:[cx,cy], armed:false, z0:st.zoom, ox:cx-r.left, oy:cy-r.top, sl0:scroller.scrollLeft, st0:scroller.scrollTop, r };
+       c0:[cx,cy], c:[cx,cy], s:1, z0:st.zoom, r, t0:performance.now(), armed:false,
+       C:[cx+scroller.scrollLeft, cy+scroller.scrollTop], anchor:anchorAt(cx,cy) };
 }
-let pinchRaf=0, pinchLast=null;
+let pinchRaf=0;
+function applyPinch(){        // 指を動かしている間は画面を変形させるだけ（ページの描き直しをしないので軽い）
+  pinchRaf=0; if (!tp || !tp.armed) return;
+  const tx=tp.c[0]+scroller.scrollLeft-tp.s*tp.C[0], ty=tp.c[1]+scroller.scrollTop-tp.s*tp.C[1];
+  pagesEl.style.transform=`translate3d(${tx}px,${ty}px,0) scale(${tp.s})`;
+}
 function updatePinch(e){
   const a=[...e.touches].find(t=>t.identifier===tp.ids[0]), b=[...e.touches].find(t=>t.identifier===tp.ids[1]);
   if (!a||!b) return;
-  pinchLast={ d:Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY), cx:(a.clientX+b.clientX)/2, cy:(a.clientY+b.clientY)/2 };
-  if (!tp.armed){      // 置いただけの手のひらで拡大や移動が起きないよう、14px動くまで待つ
-    if (Math.abs(pinchLast.d-tp.d0)<14 && Math.hypot(pinchLast.cx-tp.c0[0], pinchLast.cy-tp.c0[1])<14) return;
-    tp.armed=true;
+  const d=Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+  const cx=(a.clientX+b.clientX)/2-tp.r.left, cy=(a.clientY+b.clientY)/2-tp.r.top;
+  if (!tp.armed){
+    if (Math.abs(d-tp.d0)<3 && Math.hypot(cx-tp.c0[0], cy-tp.c0[1])<3) return;
+    tp.armed=true; closePop();
+    pinchSpacer.style.width=scroller.scrollWidth+'px'; pinchSpacer.style.height=scroller.scrollHeight+'px';
+    pagesEl.style.transformOrigin='0 0'; pagesEl.style.willChange='transform';
+    if (sel) $('#selbar').hidden=true;
   }
-  if (pinchRaf) return;
-  pinchRaf=requestAnimationFrame(()=>{
-    pinchRaf=0; if (!tp||!pinchLast) return;
-    const z=clamp(tp.z0*pinchLast.d/tp.d0, ZMIN, ZMAX), ratio=z/tp.z0;
-    st.zoom=z; layout();
-    scroller.scrollLeft=(tp.sl0+tp.ox)*ratio-(pinchLast.cx-tp.r.left);
-    scroller.scrollTop =(tp.st0+tp.oy)*ratio-(pinchLast.cy-tp.r.top);
-    scheduleHiRes();
-  });
+  tp.s=clamp(d/tp.d0, ZMIN/tp.z0, ZMAX/tp.z0); tp.c=[cx,cy];
+  if (!pinchRaf) pinchRaf=requestAnimationFrame(applyPinch);
+}
+function endPinch(commit){    // 指を離したら倍率を確定し、指の間にあった位置がそのまま残るようにスクロールを合わせる
+  const t=tp; if (!t) return; tp=null;
+  if (pinchRaf){ cancelAnimationFrame(pinchRaf); pinchRaf=0; }
+  pagesEl.style.transform=''; pagesEl.style.willChange='';
+  if (t.armed && commit){
+    st.zoom=clamp(t.z0*t.s, ZMIN, ZMAX); layout();
+    const a=t.anchor;
+    if (a){ scroller.scrollLeft=a.el.offsetLeft+a.fx*a.el.offsetWidth-t.c[0]; scroller.scrollTop=a.el.offsetTop+a.fy*a.el.offsetHeight-t.c[1]; }
+    scheduleHiRes(); updateIndicator();
+  }
+  pinchSpacer.style.width='1px'; pinchSpacer.style.height='1px';
+  if (sel) positionSelBar();
 }
 scroller.addEventListener('touchstart', e => {
   const now=performance.now();
   const stylus=[...e.touches].some(t=>t.touchType==='stylus');
   const palm=[...e.changedTouches].some(t=>t.touchType!=='stylus' && isPalm(t));
   if (!tap) tap={ t0:now, max:0, moved:false, bad:false, minSep:1e9, pos:new Map() };
-  if (stylus || palm || now<penUntil){      // ペンを使っている最中・手のひらの接触は、スクロールも拡大も取り消しも起こさない
-    tap.bad=true; if (stylus && tp){ tp=null; scheduleHiRes(); }
+  if (stylus){                 // ペンが触れたら、直前に手のひらで始まった拡大は取り消す
+    tap.bad=true; if (tp) endPinch(now-tp.t0>400);
     if (e.cancelable) e.preventDefault(); return;
   }
+  if (palm){ tap.bad=true; if (e.cancelable) e.preventDefault(); return; }
+  if (now<penUntil) tap.bad=true;   // 書いた直後の接触では、2本指タップの取り消しをしない（拡大・スクロールはできる）
   for (const t of e.changedTouches) tap.pos.set(t.identifier,[t.clientX,t.clientY]);
   const fs=fingers(e.touches);
   tap.max=Math.max(tap.max, fs.length);
@@ -748,14 +797,14 @@ scroller.addEventListener('touchstart', e => {
 scroller.addEventListener('touchmove', e => {
   if (tap) for (const t of e.changedTouches){ const s=tap.pos.get(t.identifier); if (s && Math.hypot(t.clientX-s[0], t.clientY-s[1])>12) tap.moved=true; }
   if (tp){ if (e.cancelable) e.preventDefault(); updatePinch(e); return; }
-  if ([...e.touches].some(t=>t.touchType==='stylus') || (cur && cur.type==='touch') || performance.now()<penUntil){ if (e.cancelable) e.preventDefault(); }
+  if ([...e.touches].some(t=>t.touchType==='stylus') || (cur && cur.type==='touch')){ if (e.cancelable) e.preventDefault(); }
 }, { passive:false });
 function touchEnd(e){
   const fs=fingers(e.touches);
-  if (tp && fs.length<2){ tp=null; scheduleHiRes(); }
+  if (tp && fs.length<2) endPinch(true);
   if (e.touches.length===0 && tap){
     const dt=performance.now()-tap.t0;
-    if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36 && performance.now()>=penUntil+200){
+    if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36 && performance.now()>=penUntil){
       if (tap.max===2){ undo(); toast('取り消しました',1200); } else if (tap.max===3){ redo(); toast('やり直しました',1200); } }
     tap=null;
   }
@@ -812,8 +861,28 @@ function syncUI(){
       b.onclick=()=>{ st.color[st.tool]=i; syncUI(); }; sw.append(b); });
   }
   const sz=$('#sizes'); sz.replaceChildren();
-  if (hasOpts){
-    const dots=st.tool==='pen'?[4,7,11]:st.tool==='hl'?[7,11,15]:[6,11,17];
+  $('#sizelbl').textContent = st.tool==='eraser' ? '大きさ' : '太さ';
+  if (colored){
+    const [w0,w1]=WRANGE[st.tool], L=Math.log(w1/w0);
+    const fromV=v=>w0*Math.exp(L*v/1000), toV=w=>Math.round(1000*Math.log(w/w0)/L);
+    const wrap=document.createElement('div'); wrap.className='wslider';
+    const prev=document.createElement('div'); prev.className='wprev'; const bar=document.createElement('span'); prev.append(bar);
+    const row=document.createElement('div'); row.className='wrow';
+    const thin=document.createElement('span'); thin.className='wend'; thin.textContent='細';
+    const rng=document.createElement('input'); rng.type='range'; rng.id='wrange'; rng.min='0'; rng.max='1000'; rng.step='1';
+    rng.setAttribute('aria-label','線の太さ'); rng.value=String(toV(st.width[st.tool]));
+    const thick=document.createElement('span'); thick.className='wend'; thick.textContent='太';
+    const val=document.createElement('output'); val.className='wval'; val.htmlFor='wrange';
+    const col=(st.tool==='pen'?PEN_COLORS:HL_COLORS)[st.color[st.tool]][0];
+    const show=()=>{ const w=st.width[st.tool], mm=w*PT_MM;
+      val.textContent=(mm<1?mm.toFixed(2):mm.toFixed(1))+' mm';
+      const h=Math.max(1, Math.min(34, w*cssK()));
+      bar.style.height=h+'px'; bar.style.background=col; bar.style.opacity= st.tool==='hl' ? HL_ALPHA : 1; };
+    rng.addEventListener('input', ()=>{ st.width[st.tool]=Math.round(fromV(+rng.value)*100)/100; show(); });
+    rng.addEventListener('change', ()=>{ try{ localStorage.setItem('akanib-width', JSON.stringify(st.width)); }catch(e){} });
+    row.append(thin, rng, thick, val); wrap.append(prev, row); sz.append(wrap); show();
+  } else if (hasOpts){
+    const dots=[6,11,17];
     ['細','中','太'].forEach((n,i)=>{ const b=document.createElement('button'); b.className='sz'; b.style.setProperty('--d',dots[i]+'px');
       b.setAttribute('aria-label','太さ '+n); b.title='太さ '+n; b.setAttribute('aria-pressed', String(i===st.size[st.tool]));
       b.onclick=()=>{ st.size[st.tool]=i; syncUI(); }; sz.append(b); });
@@ -1003,6 +1072,7 @@ $('#export').onclick=async()=>{
         for (let x=step;x<p.w;x+=step) page.drawLine({start:{x,y:0},end:{x,y:p.h},thickness:.35,color:col});
         for (let y=step;y<p.h;y+=step) page.drawLine({start:{x:0,y:p.h-y},end:{x:p.w,y:p.h-y},thickness:.35,color:col});
       }
+      try { if (PDFLib.setLineJoin && PDFLib.LineJoinStyle) page.pushOperators(PDFLib.setLineJoin(PDFLib.LineJoinStyle.Round)); } catch(_){}
       for (const s of p.strokes){
         if (s.tool==='hl'){
           const q=s.pts, nq=q.length/3, T=i=>toPdf(p,q[i*3],q[i*3+1]);
@@ -1014,9 +1084,10 @@ $('#export').onclick=async()=>{
           }
           page.drawSvgPath(d,{ x:0, y:0, borderColor:hexRgb(s.color), borderWidth:s.w, borderOpacity:HL_ALPHA, borderLineCap:LineCapStyle.Round });
         } else {
-          const poly=penPolygon(s); let d='';
-          for (let i=0;i<poly.length;i+=2){ const [a,b]=toPdf(p,poly[i],poly[i+1]); d+=(i?'L':'M')+f2(a)+' '+f2(b)+' '; }
-          page.drawSvgPath(d+'Z',{ x:0, y:0, color:hexRgb(s.color) });
+          for (const r of strokeRuns(s, 0.4)){
+            let d=''; for (let i=0;i<r.pts.length;i+=2){ const [a2,b2]=toPdf(p,r.pts[i],r.pts[i+1]); d+=(i?'L':'M')+f2(a2)+' '+f2(b2)+' '; }
+            page.drawSvgPath(d,{ x:0, y:0, borderColor:hexRgb(s.color), borderWidth:r.w, borderLineCap:LineCapStyle.Round });
+          }
         }
       }
     }
