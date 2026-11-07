@@ -151,8 +151,6 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
   background:var(--ink);color:var(--bar);padding:10px 14px;border-radius:10px;font-size:13px;max-width:calc(100% - 48px);
   box-shadow:var(--shadow);transition:opacity .2s}
 #toast.off{opacity:0;pointer-events:none}
-.stage{position:absolute;left:-30000px;top:0;background:#fff;color:#000;width:max-content}
-.stage section.docx{box-shadow:none!important;margin:0!important}
 .vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
 
 .help{position:fixed;left:max(16px,calc(env(safe-area-inset-left,0px) + 12px));bottom:calc(env(safe-area-inset-bottom,0px) + 16px);z-index:4;
@@ -1328,9 +1326,7 @@ $('#export').onclick=()=>exportPdf();
 /* ---------- Office import (Word / Excel / PowerPoint → PDF pages) ---------- */
 const LIBS = {
   jszip:'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-  h2c:'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
-  xlsx:'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-  docx:'https://cdn.jsdelivr.net/npm/docx-preview@0.4.1/dist/docx-preview.min.js'
+  xlsx:'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
 };
 const OFFICE_EXT = { docx:'Word', xlsx:'Excel', xlsm:'Excel', xls:'Excel', csv:'Excel', pptx:'PowerPoint' };
 const loadedLibs = {};
@@ -1373,34 +1369,515 @@ async function pagesToPdf(pages, fmt, prog){
   return await doc.save();
 }
 
-/* ----- Word ----- */
+/* ----- Word：文書の中身（XML）を直接読んで、ページごとに描く（外部の変換部品を使わない） ----- */
+const W_NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const R_NS='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const A_NS='http://schemas.openxmlformats.org/drawingml/2006/main';
+const wk=(el,n)=>{ if (!el) return null; for (const c of el.children) if (c.localName===n) return c; return null; };
+const wks=(el,n)=>el ? [...el.children].filter(c=>c.localName===n) : [];
+const wa=(el,n)=>{ if (!el) return null; let v=el.getAttributeNS(W_NS,n); if (v==null || v==='') v=el.getAttribute('w:'+n); return v==null || v==='' ? null : v; };
+const wOn=el=>{ const v=wa(el,'val'); return !(v==='0' || v==='false' || v==='off' || v==='none'); };
+const WHL={ yellow:'#ffff00', green:'#00ff00', cyan:'#00ffff', magenta:'#ff00ff', blue:'#0000ff', red:'#ff0000', darkBlue:'#000080', darkCyan:'#008080',
+  darkGreen:'#008000', darkMagenta:'#800080', darkRed:'#800000', darkYellow:'#808000', darkGray:'#808080', lightGray:'#c0c0c0', black:'#000000', white:'#ffffff' };
+const W_SANS='"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","YuGothic","Noto Sans JP","Noto Sans CJK JP","Meiryo",sans-serif';
+const W_SERIF='"Hiragino Mincho ProN","Yu Mincho","YuMincho","Noto Serif JP","Noto Serif CJK JP","MS Mincho",serif';
+const W_TOK=/\t|\s+|[　-ヿ㐀-鿿豈-﫿＀-￯①-⓿■-➿]|[^\s　-ヿ㐀-鿿豈-﫿＀-￯①-⓿■-➿]+/g;
+const W_NOSTART=/^[、。，．・：；？！ー－」』）】〉》〕｝〟’”…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々〻)\]}.,:;!?%]/;
+
+function wParseRPr(el){
+  const o={}; if (!el) return o;
+  const f=wk(el,'rFonts'); if (f){ const ea=wa(f,'eastAsia'), as=wa(f,'ascii')||wa(f,'hAnsi'); if (ea) o.fontEA=ea; if (as) o.fontA=as; }
+  const sz=wk(el,'sz'); if (sz && wa(sz,'val')) o.sz=+wa(sz,'val')/2;
+  for (const [k,n] of [['b','b'],['i','i'],['strike','strike'],['strike','dstrike'],['vanish','vanish']]){ const e=wk(el,n); if (e) o[k]=wOn(e); }
+  const u=wk(el,'u'); if (u){ const v=wa(u,'val'); o.u = v ? v!=='none' : true; }
+  const c=wk(el,'color'); if (c){ const v=wa(c,'val'); o.color = v && v!=='auto' ? '#'+v : null; }
+  const hl=wk(el,'highlight'); if (hl){ const v=wa(hl,'val'); o.hl = v && v!=='none' ? (WHL[v]||null) : null; }
+  const shd=wk(el,'shd'); if (shd){ const v=wa(shd,'fill'); if (v && v!=='auto') o.shd='#'+v; }
+  const va=wk(el,'vertAlign'); if (va) o.va=wa(va,'val');
+  const rs=wk(el,'rStyle'); if (rs) o.rStyle=wa(rs,'val');
+  return o;
+}
+function wParsePPr(el){
+  const o={}; if (!el) return o;
+  const ps=wk(el,'pStyle'); if (ps) o.pStyle=wa(ps,'val');
+  const jc=wk(el,'jc'); if (jc) o.jc=wa(jc,'val');
+  const sp=wk(el,'spacing');
+  if (sp){ for (const n of ['before','after','line','beforeLines','afterLines']){ const v=wa(sp,n); if (v!=null) o[n]=+v; } const lr=wa(sp,'lineRule'); if (lr) o.lineRule=lr; }
+  const ind=wk(el,'ind');
+  if (ind) for (const [k,names] of [['left',['left','start']],['right',['right','end']],['firstLine',['firstLine']],['hanging',['hanging']],
+                                    ['leftChars',['leftChars','startChars']],['firstLineChars',['firstLineChars']],['hangingChars',['hangingChars']]])
+    for (const n of names){ const v=wa(ind,n); if (v!=null){ o[k]=+v; break; } }
+  const np=wk(el,'numPr'); if (np){ const il=wk(np,'ilvl'), ni=wk(np,'numId'); if (ni) o.numId=wa(ni,'val'); if (il) o.ilvl=+wa(il,'val'); }
+  const shd=wk(el,'shd'); if (shd){ const v=wa(shd,'fill'); if (v && v!=='auto') o.shd='#'+v; }
+  const pb=wk(el,'pBdr');
+  if (pb){ o.bdr={}; for (const s of ['top','bottom']){ const e=wk(pb,s); const v=e && wa(e,'val'); if (e && v!=='none' && v!=='nil') o.bdr[s]={ w:Math.max(0.5,(+wa(e,'sz')||4)/8), c:(wa(e,'color') && wa(e,'color')!=='auto') ? '#'+wa(e,'color') : '#000', sp:+(wa(e,'space')||1) }; } }
+  for (const n of ['keepNext','pageBreakBefore','contextualSpacing']){ const e=wk(el,n); if (e) o[n]=wOn(e); }
+  const tabs=wk(el,'tabs'); if (tabs) o.tabs=wks(tabs,'tab').filter(t=>wa(t,'val')!=='clear').map(t=>({ pos:(+wa(t,'pos')||0)/20, val:wa(t,'val'), leader:wa(t,'leader') }));
+  const rpr=wk(el,'rPr'); if (rpr) o.markR=wParseRPr(rpr);
+  const sect=wk(el,'sectPr'); if (sect) o.sectPr=sect;
+  return o;
+}
+function wMergeP(t,s){
+  for (const k in s){ if (s[k]===undefined) continue;
+    if (k==='firstLine' || k==='firstLineChars'){ delete t.hanging; delete t.hangingChars; }
+    if (k==='hanging' || k==='hangingChars'){ delete t.firstLine; delete t.firstLineChars; }
+    if (k==='left'){ delete t.leftChars; }
+    t[k]=s[k]; }
+  return t;
+}
+function wFmtNum(v, fmt){
+  const roman=n=>{ const m=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']]; let s=''; for (const [a,r] of m) while (n>=a){ s+=r; n-=a; } return s; };
+  const kanji=n=>{ const d='〇一二三四五六七八九'; if (n<10) return d[n]; if (n<100) return (n>=20?d[Math.floor(n/10)]:'')+'十'+(n%10?d[n%10]:''); return String(n); };
+  switch (fmt){
+    case 'decimalZero': return String(v).padStart(2,'0');
+    case 'upperRoman': return roman(v); case 'lowerRoman': return roman(v).toLowerCase();
+    case 'upperLetter': return String.fromCharCode(65+((v-1)%26)); case 'lowerLetter': return String.fromCharCode(97+((v-1)%26));
+    case 'decimalFullWidth': case 'decimalFullWidth2': return String(v).replace(/\d/g,c=>String.fromCharCode(0xFF10+ +c));
+    case 'decimalEnclosedCircle': case 'decimalEnclosedCircleChinese': return v>=1 && v<=20 ? String.fromCharCode(0x2460+v-1) : String(v);
+    case 'aiueoFullWidth': case 'aiueo': return 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン'[(v-1)%46];
+    case 'iroha': case 'irohaFullWidth': return 'イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス'[(v-1)%47];
+    case 'ideographDigital': return String(v).split('').map(c=>'〇一二三四五六七八九'[+c]).join('');
+    case 'japaneseCounting': case 'chineseCounting': case 'ideographTraditional': return kanji(v);
+    default: return String(v);
+  }
+}
+function wBullet(t){
+  const map={ '':'•', '':'▪', '':'➢', '':'✓', '':'❖', '':'○', '':'■', 'o':'◦' };
+  if (!t) return '•'; if (map[t]) return map[t];
+  const c=t.charCodeAt(0); return c>=0xF000 && c<=0xF0FF ? '•' : t;
+}
+
 async function renderDocx(buf, prog){
-  await loadScript(LIBS.jszip); await loadScript(LIBS.docx); await loadScript(LIBS.h2c);
-  const stage=document.createElement('div'); stage.className='stage'; document.body.append(stage);
-  try {
-    prog('レイアウトを計算中');
-    await docx.renderAsync(buf, stage, null, { className:'docx', inWrapper:false, breakPages:true,
-      ignoreLastRenderedPageBreak:false, renderHeaders:true, renderFooters:true, renderFootnotes:true,
-      useBase64URL:true, experimental:true });
-    if (document.fonts && document.fonts.ready) await document.fonts.ready;
-    await nextFrame();
-    const secs=[...stage.querySelectorAll('section.docx')];
-    if (!secs.length) throw new Error('本文が見つかりませんでした');
-    const pages=[];
-    for (let i=0;i<secs.length;i++){
-      prog(`${i+1} / ${secs.length} ページ`);
-      const sec=secs[i], rect=sec.getBoundingClientRect();
-      const pageHpx=parseFloat(getComputedStyle(sec).minHeight)||rect.height;
-      const scale=Math.min(2, 1800/rect.width);
-      const canvas=await html2canvas(sec, { scale, backgroundColor:'#ffffff', useCORS:true, logging:false, scrollX:0, scrollY:0,
-        windowWidth:Math.max(1200, Math.ceil(rect.width)+40),
-        onclone:(d)=>{ const s=d.querySelector('.stage'); if (s){ s.style.left='0px'; s.style.top='0px'; } } });
-      for (const c of sliceCanvas(canvas, Math.round(pageHpx*scale)))
-        pages.push({ canvas:c, wPt:rect.width*0.75, hPt:c.height/scale*0.75 });
-      await nextFrame();
+  await loadScript(LIBS.jszip);
+  const zip=await JSZip.loadAsync(buf);
+  const xmlOf=async p=>{ const f=p && zip.file(p); return f ? new DOMParser().parseFromString(await f.async('string'),'application/xml') : null; };
+  const relsOf=async part=>{
+    const i=part.lastIndexOf('/'), dir=part.slice(0,i), name=part.slice(i+1);
+    const d=await xmlOf(dir+'/_rels/'+name+'.rels'); const m={};
+    if (d) for (const r of d.getElementsByTagName('Relationship'))
+      m[r.getAttribute('Id')]={ type:r.getAttribute('Type')||'', target: r.getAttribute('TargetMode')==='External' ? null : joinPath(dir, r.getAttribute('Target')) };
+    return m;
+  };
+  const MIME={ png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', bmp:'image/bmp', webp:'image/webp', svg:'image/svg+xml' };
+  const urls=[];
+  const loadImages=async (xml, rels)=>{        // その部分で使う画像を先に読み込んでおく
+    const out={}; if (!xml) return out;
+    const ids=new Set();
+    for (const b of xml.getElementsByTagNameNS(A_NS,'blip')){ const id=b.getAttributeNS(R_NS,'embed'); if (id) ids.add(id); }
+    for (const b of xml.getElementsByTagName('v:imagedata')){ const id=b.getAttributeNS(R_NS,'id')||b.getAttribute('r:id'); if (id) ids.add(id); }
+    for (const id of ids){
+      const r=rels[id]; const f=r && r.target && zip.file(r.target); const ext=r && r.target ? r.target.split('.').pop().toLowerCase() : '';
+      if (!f || !MIME[ext]){ out[id]=null; continue; }
+      const url=URL.createObjectURL(new Blob([await f.async('arraybuffer')],{ type:MIME[ext] })); urls.push(url);
+      out[id]=await new Promise(res=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=url; });
     }
-    return pages;
-  } finally { stage.remove(); }
+    return out;
+  };
+
+  prog('文書を読み込み中');
+  const docXml=await xmlOf('word/document.xml');
+  if (!docXml || !docXml.getElementsByTagNameNS(W_NS,'body')[0]) throw new Error('Wordファイルの本文が見つかりませんでした');
+  const body=docXml.getElementsByTagNameNS(W_NS,'body')[0];
+  const docRels=await relsOf('word/document.xml');
+  const docImgs=await loadImages(docXml, docRels);
+  const stylesXml=await xmlOf('word/styles.xml'), numXml=await xmlOf('word/numbering.xml'), setXml=await xmlOf('word/settings.xml');
+
+  // ---- styles ----
+  const styles={}; let defP=null, defT=null, docR={}, docP={};
+  if (stylesXml){
+    const dd=stylesXml.getElementsByTagNameNS(W_NS,'docDefaults')[0];
+    if (dd){ docR=wParseRPr(wk(wk(dd,'rPrDefault'),'rPr')); docP=wParsePPr(wk(wk(dd,'pPrDefault'),'pPr')); }
+    for (const s of stylesXml.getElementsByTagNameNS(W_NS,'style')){
+      const id=wa(s,'styleId'); if (!id) continue;
+      const o={ type:wa(s,'type'), basedOn:wa(wk(s,'basedOn'),'val'), p:wParsePPr(wk(s,'pPr')), r:wParseRPr(wk(s,'rPr')), tbl:wk(s,'tblPr') };
+      styles[id]=o; const d=wa(s,'default'); if (d==='1' || d==='true'){ if (o.type==='paragraph') defP=id; if (o.type==='table') defT=id; }
+    }
+  }
+  const chain=id=>{ const out=[], seen=new Set(); while (id && styles[id] && !seen.has(id)){ seen.add(id); out.unshift(styles[id]); id=styles[id].basedOn; } return out; };
+  const sizeOf=R=>R.sz||10.5;
+
+  // ---- numbering ----
+  const absNums={}, nums={}, counters={};
+  if (numXml){
+    for (const an of numXml.getElementsByTagNameNS(W_NS,'abstractNum')){
+      const lv={};
+      for (const l of wks(an,'lvl')) lv[+wa(l,'ilvl')]={ start:+(wa(wk(l,'start'),'val')||1), fmt:wa(wk(l,'numFmt'),'val')||'decimal', text:wa(wk(l,'lvlText'),'val')||'',
+        ind:wParsePPr(wk(l,'pPr')), r:wParseRPr(wk(l,'rPr')), suff:wa(wk(l,'suff'),'val')||'tab' };
+      absNums[wa(an,'abstractNumId')]=lv;
+    }
+    for (const n of numXml.getElementsByTagNameNS(W_NS,'num')){
+      const ov={}; for (const o of wks(n,'lvlOverride')){ const so=wk(o,'startOverride'); if (so) ov[+wa(o,'ilvl')]=+wa(so,'val'); }
+      nums[wa(n,'numId')]={ abs:wa(wk(n,'abstractNumId'),'val'), ov };
+    }
+  }
+  const numLevel=(id,il)=>{ const n=nums[id]; const a=n && absNums[n.abs]; const l=a && a[il]; return l ? { ...l, start: n.ov[il]!=null ? n.ov[il] : l.start } : null; };
+  const numLabel=(id,il,lvl)=>{
+    const c=counters[id]||(counters[id]=[]);
+    c[il] = c[il]==null ? lvl.start : c[il]+1; for (let i=il+1;i<9;i++) c[i]=null;
+    if (lvl.fmt==='bullet') return wBullet(lvl.text);
+    if (lvl.fmt==='none') return '';
+    return lvl.text.replace(/%(\d)/g,(m,d)=>{ const k=+d-1, L=numLevel(id,k)||lvl; return wFmtNum(c[k]!=null ? c[k] : L.start, L.fmt); });
+  };
+
+  // ---- sections ----
+  const secOf=sp=>{
+    const g=wk(sp,'pgSz'), m=wk(sp,'pgMar'), grid=wk(sp,'docGrid');
+    const tw=(e,n,d)=>{ const v=wa(e,n); return (v!=null ? +v : d)/20; };
+    const s={ w:tw(g,'w',11906), h:tw(g,'h',16838), mt:tw(m,'top',1440), mb:tw(m,'bottom',1440), ml:tw(m,'left',1440), mr:tw(m,'right',1440),
+      hd:tw(m,'header',720), fd:tw(m,'footer',720), titlePg: !!wk(sp,'titlePg') && wOn(wk(sp,'titlePg')), hdr:{}, ftr:{},
+      pitch: grid && /lines/.test(wa(grid,'type')||'') ? (+wa(grid,'linePitch')||0)/20 : 0 };
+    s.mt=Math.abs(s.mt); s.mb=Math.abs(s.mb);
+    for (const h of wks(sp,'headerReference')) s.hdr[wa(h,'type')||'default']=h.getAttributeNS(R_NS,'id')||h.getAttribute('r:id');
+    for (const h of wks(sp,'footerReference')) s.ftr[wa(h,'type')||'default']=h.getAttributeNS(R_NS,'id')||h.getAttribute('r:id');
+    return s;
+  };
+  const flat=[];      // 本文の段落と表（内容コントロールなどの入れ物は開いて並べる）
+  const flatten=el=>{ for (const c of el.children){ const n=c.localName;
+    if (n==='p' || n==='tbl') flat.push(c); else if (n==='sdt') flatten(wk(c,'sdtContent')||c); else if (n==='customXml') flatten(c); } };
+  flatten(body);
+  const finalSec=secOf(wk(body,'sectPr'));
+  const sections=[]; let cur={ blocks:[] };
+  for (const b of flat){ cur.blocks.push(b);
+    if (b.localName==='p'){ const sp=wk(wk(b,'pPr'),'sectPr'); if (sp){ cur.sec=secOf(sp); sections.push(cur); cur={ blocks:[] }; } } }
+  cur.sec=finalSec; sections.push(cur);
+  // 前のセクションで指定されたヘッダー・フッターは、指定のないセクションにも引き継ぐ
+  for (let i=1;i<sections.length;i++){ const a=sections[i-1].sec, b=sections[i].sec;
+    for (const k of ['default','first','even']){ if (!b.hdr[k] && a.hdr[k]) b.hdr[k]=a.hdr[k]; if (!b.ftr[k] && a.ftr[k]) b.ftr[k]=a.ftr[k]; } }
+
+  // ---- measuring ----
+  const mc=document.createElement('canvas').getContext('2d');
+  const fontOf=(R,sz)=>`${R.i?'italic ':''}${R.b?'700':'400'} ${sz}px ${/明朝|Mincho|Serif|Times|Century|Georgia|Cambria|Garamond/i.test((R.fontEA||'')+' '+(R.fontA||'')) ? W_SERIF : W_SANS}`;
+  const effP=(pp, tb)=>{        // 既定 → 表のスタイル → 段落スタイル → 段落の直接指定 の順に重ねる
+    const sid=pp.pStyle||defP; const P={...docP}, R={...docR};
+    if (tb && sid!==defP){ wMergeP(P, tb.P); Object.assign(R, tb.R); }
+    for (const st of chain(sid)){ wMergeP(P, st.p); Object.assign(R, st.r); }
+    if (tb && sid===defP){ wMergeP(P, tb.P); Object.assign(R, tb.R); }
+    const numId = pp.numId!=null ? pp.numId : P.numId, ilvl = pp.ilvl!=null ? pp.ilvl : (P.ilvl||0);
+    const lvl = numId && numId!=='0' ? numLevel(numId, ilvl) : null;
+    if (lvl) wMergeP(P, lvl.ind);
+    wMergeP(P, pp);
+    return { P, R, sid, numId, ilvl, lvl };
+  };
+  const effR=(R0, rp)=>{ const R={...R0}; if (rp.rStyle) for (const st of chain(rp.rStyle)) Object.assign(R, st.r); Object.assign(R, rp); return R; };
+
+  function collect(pEl, E, env){     // 段落の中身を「文字・タブ・改行・画像・ページ番号」の並びにする
+    const out=[]; const fld=env.fld || (env.fld={ mode:null, instr:'' });
+    const run=(r)=>{
+      const R=effR(E.R, wParseRPr(wk(r,'rPr'))); if (R.vanish) return;
+      for (const c of r.children){
+        const n=c.localName;
+        if (n==='fldChar'){ const t=wa(c,'fldCharType');
+          if (t==='begin'){ fld.mode='instr'; fld.instr=''; }
+          else if (t==='separate'){ const ins=fld.instr.trim().toUpperCase();
+            if (/^(PAGE|NUMPAGES|SECTIONPAGES)\b/.test(ins)){ out.push({ field: ins.startsWith('PAGE') ? 'PAGE' : 'NUMPAGES', R }); fld.mode='skip'; } else fld.mode='result'; }
+          else if (t==='end') fld.mode=null;
+          continue; }
+        if (n==='instrText'){ if (fld.mode==='instr') fld.instr+=c.textContent; continue; }
+        if (fld.mode==='instr' || fld.mode==='skip') continue;
+        if (n==='t') out.push({ text:c.textContent, R });
+        else if (n==='tab' || n==='ptab') out.push({ tab:true, R });
+        else if (n==='br'){ const t=wa(c,'type'); out.push({ br: t==='page' ? 'page' : 'line', R }); }
+        else if (n==='cr') out.push({ br:'line', R });
+        else if (n==='noBreakHyphen') out.push({ text:'‑', R });
+        else if (n==='sym'){ const ch=parseInt(wa(c,'char')||'0',16); out.push({ text: wBullet(String.fromCharCode(ch>=0xF000 ? ch : ch)), R }); }
+        else if (n==='drawing'){
+          const ex=c.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing','extent')[0];
+          const bl=c.getElementsByTagNameNS(A_NS,'blip')[0];
+          if (ex){ const w=(+ex.getAttribute('cx')||0)/12700, h=(+ex.getAttribute('cy')||0)/12700; const id=bl && bl.getAttributeNS(R_NS,'embed');
+            if (w>0 && h>0) out.push({ img: id ? env.imgs[id] : null, w, h, R }); }
+        }
+        else if (n==='pict' || n==='object'){
+          const im=c.getElementsByTagName('v:imagedata')[0]; const sh=c.getElementsByTagName('v:shape')[0];
+          if (im && sh){ const st=sh.getAttribute('style')||''; const g=k=>{ const m=st.match(new RegExp(k+':\\s*([\\d.]+)(pt|in|px)?')); if (!m) return 0; const v=+m[1]; return m[2]==='in' ? v*72 : m[2]==='px' ? v*0.75 : v; };
+            const id=im.getAttributeNS(R_NS,'id')||im.getAttribute('r:id'); const w=g('width'), h=g('height'); if (w>0 && h>0) out.push({ img: env.imgs[id]||null, w, h, R }); }
+        }
+      }
+    };
+    const walk=el=>{ for (const c of el.children){ const n=c.localName;
+      if (n==='r') run(c);
+      else if (n==='hyperlink' || n==='smartTag' || n==='ins' || n==='customXml' || n==='moveTo' || n==='dir' || n==='bdo') walk(c);
+      else if (n==='sdt') walk(wk(c,'sdtContent')||c);
+      else if (n==='fldSimple'){ const ins=(wa(c,'instr')||'').trim().toUpperCase();
+        if (/^(PAGE|NUMPAGES|SECTIONPAGES)\b/.test(ins)) out.push({ field: ins.startsWith('PAGE') ? 'PAGE' : 'NUMPAGES', R:E.R }); else walk(c); }
+    } };
+    walk(pEl);
+    return out;
+  }
+
+  function measurePara(pEl, boxW, env){
+    const E=effP(wParsePPr(wk(pEl,'pPr')), env.tbl), P=E.P;
+    const base=sizeOf(E.R);
+    const tw=v=>(v||0)/20;
+    const left = P.leftChars!=null ? P.leftChars/100*base : tw(P.left);
+    const right = tw(P.right);
+    const first = P.firstLineChars!=null ? P.firstLineChars/100*base : P.hangingChars!=null ? -P.hangingChars/100*base
+                : P.firstLine!=null ? tw(P.firstLine) : P.hanging!=null ? -tw(P.hanging) : 0;
+    const pieces=collect(pEl, E, env);
+    const maxX=boxW-right;
+    const lines=[]; let line=null;
+    const newLine=(x)=>{ line={ items:[], x0:x, end:x, brk:false, page:false }; lines.push(line); return line; };
+    newLine(left+first);
+    if (E.lvl){
+      const label=env.noNum ? '' : numLabel(E.numId, E.ilvl, E.lvl);
+      if (label){
+        const R={ ...E.R, ...(E.lvl.r||{}) }; const firstRun=pieces.find(q=>q.text); if (firstRun && !E.lvl.r.sz) R.sz=firstRun.R.sz||R.sz;
+        const sz=sizeOf(R); mc.font=fontOf(R,sz); const w=mc.measureText(label).width;
+        line.items.push({ t:'text', text:label, R, sz, x:left+first, w });
+        let x=left+first+w;
+        if (E.lvl.suff==='tab'){ const st = left>x+0.5 ? left : Math.floor(x/36+1)*36; x = st<=maxX ? st : x+sz*0.5; }
+        else if (E.lvl.suff==='space') x+=sz*0.3;
+        line.end=x;
+      }
+    }
+    const place=(it)=>{ it.x=line.end; line.items.push(it); line.end+=it.w; };
+    for (const q of pieces){
+      if (q.br){ line.brk=true; if (q.br==='page') line.page=true; newLine(left); continue; }
+      const R=q.R; const sz=sizeOf(R)*(q.R.va==='superscript'||q.R.va==='subscript' ? 0.65 : 1);
+      if (q.tab){
+        const stops=(P.tabs||[]).map(t=>t.pos).filter(p=>p>line.end+0.5).sort((a,b)=>a-b);
+        let stop=stops[0]; const tdef=(P.tabs||[]).find(t=>t.pos===stop);
+        if (stop==null){ stop=Math.floor(line.end/36+1)*36; if (left>line.end+0.5 && left<stop) stop=left; }
+        if (stop>maxX){ newLine(left); continue; }
+        line.items.push({ t:'tab', x:line.end, w:stop-line.end, leader: tdef && tdef.leader, R, sz }); line.end=stop; continue;
+      }
+      if (q.img!==undefined || q.w){
+        let w=q.w, h=q.h; const avail=maxX-left; if (w>avail){ h*=avail/w; w=avail; }
+        if (line.items.length && line.end+w>maxX) newLine(left);
+        place({ t:'img', img:q.img, w, h, R, sz:base }); continue;
+      }
+      const text = q.field ? (q.field==='PAGE' ? String(env.page||1) : String(env.total||1)) : q.text;
+      mc.font=fontOf(R,sz);
+      for (const tok of text.match(W_TOK)||[]){
+        if (tok==='\t'){ continue; }
+        const space=/^\s+$/.test(tok);
+        let w=mc.measureText(tok).width;
+        if (line.items.length && line.end+w>maxX+0.01 && !space && !W_NOSTART.test(tok)){
+          if (w>maxX-left){                 // 1行に収まらない長い英数字は文字単位で折り返す
+            let buf='';
+            for (const ch of tok){ const w2=mc.measureText(buf+ch).width; if (line.end+w2>maxX && buf){ place({ t:'text', text:buf, R, sz, w:mc.measureText(buf).width }); newLine(left); buf=ch; } else buf+=ch; }
+            if (buf) place({ t:'text', text:buf, R, sz, w:mc.measureText(buf).width });
+            continue;
+          }
+          newLine(left);
+        }
+        if (space && !line.items.length && lines.length>1) continue;
+        place({ t:'text', text:tok, R, sz, w });
+      }
+    }
+    // 行の高さと揃え
+    const markSz = sizeOf(P.markR ? { ...E.R, ...P.markR } : E.R);
+    const mult = (P.lineRule==null || P.lineRule==='auto') && P.line ? P.line/240 : 1;
+    let h=0;
+    lines.forEach((L,i)=>{
+      while (L.items.length && L.items[L.items.length-1].t==='text' && /^\s+$/.test(L.items[L.items.length-1].text)){ const it=L.items.pop(); L.end-=it.w; }
+      let maxSz=0, imgH=0; for (const it of L.items){ if (it.t==='img') imgH=Math.max(imgH,it.h); else maxSz=Math.max(maxSz,it.sz); }
+      if (!maxSz) maxSz=markSz;
+      let lh;
+      if (P.lineRule==='exact') lh=tw(P.line);
+      else if (P.lineRule==='atLeast') lh=Math.max(maxSz*1.4, tw(P.line));
+      else lh=maxSz*1.4*mult;
+      if (env.pitch && P.lineRule!=='exact'){ const need=maxSz*1.25*mult; lh=Math.max(env.pitch*mult, Math.ceil(need/env.pitch-0.05)*env.pitch); }
+      const asc=Math.max(maxSz*0.88, imgH), desc=maxSz*0.24;
+      if (imgH) lh=Math.max(lh, asc+desc+maxSz*0.15);
+      L.h=lh; L.base=(lh-(asc+desc))/2+asc; L.sz=maxSz;
+      const last = i===lines.length-1 || L.brk;
+      const extra=maxX-L.end;
+      const jc=P.jc||'left';
+      if ((jc==='center') && extra>0) for (const it of L.items) it.x+=extra/2;
+      else if ((jc==='right' || jc==='end') && extra>0) for (const it of L.items) it.x+=extra;
+      else if ((jc==='both' || jc==='distribute' || jc==='thaiDistribute') && !last && extra>0 && L.items.length>1 && extra<(maxX-L.x0)*0.4){
+        const n=L.items.length-1; L.items.forEach((it,k)=>{ it.x+=extra*k/n; }); }
+      h+=lh;
+    });
+    const before = P.beforeLines!=null ? P.beforeLines/100*base*1.4 : tw(P.before);
+    const after = P.afterLines!=null ? P.afterLines/100*base*1.4 : tw(P.after);
+    return { lines, h, before, after, P, sid:E.sid, left, right, boxW };
+  }
+
+  function drawLine(ctx, L, m, x0, top){
+    if (m.P.shd){ ctx.fillStyle=m.P.shd; ctx.fillRect(x0+m.left, top, m.boxW-m.left-m.right, L.h); }
+    const by=top+L.base;
+    for (const it of L.items){
+      const x=x0+it.x;
+      if (it.t==='img'){
+        if (it.img){ try { ctx.drawImage(it.img, x, by-it.h, it.w, it.h); } catch(e){} }
+        else { ctx.save(); ctx.fillStyle='#f2f3f5'; ctx.fillRect(x, by-it.h, it.w, it.h); ctx.strokeStyle='#b8bec8'; ctx.lineWidth=0.6; ctx.strokeRect(x, by-it.h, it.w, it.h);
+          ctx.fillStyle='#7a8190'; ctx.font=`9px ${W_SANS}`; ctx.textAlign='center'; ctx.fillText('画像（表示できない形式）', x+it.w/2, by-it.h/2+3); ctx.restore(); }
+        continue;
+      }
+      if (it.t==='tab'){
+        if (it.leader && it.leader!=='none'){ ctx.fillStyle=it.R.color||'#1a1a1a'; ctx.font=fontOf(it.R,it.sz); mc.font=ctx.font;
+          const ch=it.leader==='dot' ? '.' : it.leader==='hyphen' ? '-' : it.leader==='underscore' ? '_' : '·'; const cw=Math.max(1, mc.measureText(ch).width*1.6||2);
+          for (let xx=x+cw; xx<x+it.w-cw*0.5; xx+=cw) ctx.fillText(ch, xx, by); }
+        continue;
+      }
+      const R=it.R, sz=it.sz;
+      const yb = R.va==='superscript' ? by-L.sz*0.33 : R.va==='subscript' ? by+L.sz*0.12 : by;
+      if (R.hl || R.shd){ ctx.fillStyle=R.hl||R.shd; ctx.fillRect(x, yb-sz*0.92, it.w, sz*1.18); }
+      ctx.font=fontOf(R,sz); ctx.fillStyle=R.color||'#1a1a1a'; ctx.fillText(it.text, x, yb);
+      if (R.u){ ctx.fillRect(x, yb+sz*0.12, it.w, Math.max(0.5, sz*0.06)); }
+      if (R.strike){ ctx.fillRect(x, yb-sz*0.3, it.w, Math.max(0.5, sz*0.06)); }
+    }
+  }
+  function borderLine(ctx, b, x1,y1,x2,y2){ if (!b) return; ctx.strokeStyle=b.c; ctx.lineWidth=b.w; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+
+  // ---- tables ----
+  const parseBorders=el=>{ const o={}; if (!el) return o;
+    for (const [k,ns] of [['top',['top']],['bottom',['bottom']],['left',['left','start']],['right',['right','end']],['insideH',['insideH']],['insideV',['insideV']]])
+      for (const n of ns){ const e=wk(el,n); if (e){ const v=wa(e,'val'); o[k] = (v==='none' || v==='nil') ? null : { w:Math.max(0.25,(+wa(e,'sz')||4)/8), c:(wa(e,'color') && wa(e,'color')!=='auto') ? '#'+wa(e,'color') : '#000' }; break; } }
+    return o; };
+  const parseMar=(el,o)=>{ if (!el) return o; for (const [k,ns] of [['l',['left','start']],['r',['right','end']],['t',['top']],['b',['bottom']]]) for (const n of ns){ const e=wk(el,n); if (e && wa(e,'w')!=null){ o[k]=+wa(e,'w')/20; break; } } return o; };
+  function measureBlocks(children, w, env){
+    const out=[]; let prev=null;
+    const list=[]; const fl=el=>{ for (const c of el.children){ const n=c.localName; if (n==='p' || n==='tbl') list.push(c); else if (n==='sdt') fl(wk(c,'sdtContent')||c); } };
+    fl(children);
+    list.forEach((c,i)=>{
+      if (c.localName==='p'){ const m=measurePara(c, w, env);
+        if (m.P.contextualSpacing && prev && prev.sid===m.sid){ m.before=0; prev.after=0; }
+        out.push({ k:'p', m }); prev=m; }
+      else { out.push({ k:'t', t:measureTable(c, w, env) }); prev=null; }
+    });
+    let h=0; for (const b of out) h += b.k==='p' ? b.m.before+b.m.h+b.m.after : b.t.h;
+    return { blocks:out, h };
+  }
+  function drawBlocks(ctx, B, x, y){
+    for (const b of B.blocks){
+      if (b.k==='p'){ y+=b.m.before; for (const L of b.m.lines){ drawLine(ctx, L, b.m, x, y); y+=L.h; } y+=b.m.after; }
+      else { for (let r=0;r<b.t.rows.length;r++){ drawRow(ctx, b.t, r, x, y); y+=b.t.rows[r].h; } }
+    }
+  }
+  function measureTable(tbl, boxW, env){
+    const tp=wk(tbl,'tblPr'); const sid=wa(wk(tp,'tblStyle'),'val')||defT;
+    let B={}, mar={ l:5.4, r:5.4, t:0, b:0 }; const tsP={}, tsR={};
+    for (const st of chain(sid)){ wMergeP(tsP, st.p); Object.assign(tsR, st.r);
+      if (st.tbl){ Object.assign(B, parseBorders(wk(st.tbl,'tblBorders'))); parseMar(wk(st.tbl,'tblCellMar'), mar); } }
+    const cenv={ ...env, tbl:{ P:tsP, R:tsR } };
+    Object.assign(B, parseBorders(wk(tp,'tblBorders'))); parseMar(wk(tp,'tblCellMar'), mar);
+    let cols=wks(wk(tbl,'tblGrid'),'gridCol').map(g=>(+wa(g,'w')||0)/20);
+    const rowsEl=wks(tbl,'tr');
+    const maxCells=Math.max(1, ...rowsEl.map(tr=>wks(tr,'tc').reduce((a,tc)=>a+(+wa(wk(wk(tc,'tcPr'),'gridSpan'),'val')||1),0)));
+    if (!cols.length || cols.some(v=>!(v>0))) cols=Array(maxCells).fill(boxW/maxCells);
+    const ind=(+wa(wk(tp,'tblInd'),'w')||0)/20, jc=wa(wk(tp,'jc'),'val');
+    const tot=cols.reduce((a,b)=>a+b,0), sc= tot>boxW-Math.max(0,ind) ? (boxW-Math.max(0,ind))/tot : 1;
+    cols=cols.map(v=>v*sc); const W=cols.reduce((a,b)=>a+b,0);
+    const colX=[0]; for (const c of cols) colX.push(colX[colX.length-1]+c);
+    const tx = jc==='center' ? (boxW-W)/2 : (jc==='right' || jc==='end') ? boxW-W : Math.max(0,ind);
+    const rows=[]; const open={};
+    rowsEl.forEach((tr,ri)=>{
+      const trPr=wk(tr,'trPr'); const th=wk(trPr,'trHeight'); const hv=th ? (+wa(th,'val')||0)/20 : 0, hr=th ? wa(th,'hRule') : null;
+      let ci=(+wa(wk(trPr,'gridBefore'),'val')||0);
+      const cells=[];
+      for (const tc of wks(tr,'tc')){
+        const pr=wk(tc,'tcPr'); const span=+(wa(wk(pr,'gridSpan'),'val')||1);
+        const vmEl=wk(pr,'vMerge'); const vm=vmEl ? (wa(vmEl,'val')==='restart' ? 'start' : 'cont') : null;
+        const shd=wk(pr,'shd'); const fill=shd && wa(shd,'fill') && wa(shd,'fill')!=='auto' ? '#'+wa(shd,'fill') : null;
+        const x=colX[Math.min(ci,cols.length)], w=colX[Math.min(ci+span,cols.length)]-x;
+        const cmar={...mar}; parseMar(wk(pr,'tcMar'), cmar);
+        const cell={ x, w, ci, span, vm, fill, tb:parseBorders(wk(pr,'tcBorders')), va:wa(wk(pr,'vAlign'),'val'), mar:cmar, rows:1 };
+        if (vm==='cont' && open[ci]){ cell.master=open[ci]; open[ci].rows++; }
+        else { cell.c=measureBlocks(tc, Math.max(4, w-cmar.l-cmar.r), cenv); if (vm==='start') open[ci]=cell; else delete open[ci]; }
+        cells.push(cell); ci+=span;
+      }
+      let h = hr==='exact' ? hv : Math.max(hv, 0);
+      if (hr!=='exact') for (const c of cells) if (c.c && c.vm!=='start') h=Math.max(h, c.c.h+c.mar.t+c.mar.b);
+      if (!h) h=12;
+      rows.push({ h, cells, header: !!wk(trPr,'tblHeader') });
+    });
+    rows.forEach((row,ri)=>{ for (const c of row.cells) if (c.vm==='start' && c.c){
+      let have=0; for (let k=ri;k<Math.min(rows.length, ri+c.rows);k++) have+=rows[k].h;
+      const need=c.c.h+c.mar.t+c.mar.b; if (need>have) rows[Math.min(rows.length-1, ri+c.rows-1)].h+=need-have; } });
+    return { x:tx, w:W, rows, B, ncol:cols.length, h:rows.reduce((a,r)=>a+r.h,0) };
+  }
+  function drawRow(ctx, T, ri, x0, y){
+    const row=T.rows[ri];
+    for (const c of row.cells){
+      if (c.master) continue;
+      let h=0; for (let k=ri;k<Math.min(T.rows.length, ri+c.rows);k++) h+=T.rows[k].h;
+      const x=x0+T.x+c.x;
+      if (c.fill){ ctx.fillStyle=c.fill; ctx.fillRect(x, y, c.w, h); }
+      if (c.c){
+        const ch=c.c.h+c.mar.t+c.mar.b; const off = c.va==='center' ? Math.max(0,(h-ch)/2) : c.va==='bottom' ? Math.max(0,h-ch) : 0;
+        ctx.save(); ctx.beginPath(); ctx.rect(x, y, c.w, h); ctx.clip();
+        drawBlocks(ctx, c.c, x+c.mar.l, y+c.mar.t+off); ctx.restore();
+      }
+      const B=T.B, last=ri+c.rows-1>=T.rows.length-1, firstCol=c.ci===0, lastCol=c.ci+c.span>=T.ncol;
+      const pick=(own, outer, inner, isOuter)=> own!==undefined ? own : (isOuter ? outer : inner);
+      borderLine(ctx, pick(c.tb.top, B.top, B.insideH, ri===0), x, y, x+c.w, y);
+      borderLine(ctx, pick(c.tb.bottom, B.bottom, B.insideH, last), x, y+h, x+c.w, y+h);
+      borderLine(ctx, pick(c.tb.left, B.left, B.insideV, firstCol), x, y, x, y+h);
+      borderLine(ctx, pick(c.tb.right, B.right, B.insideV, lastCol), x+c.w, y, x+c.w, y+h);
+    }
+  }
+
+  // ---- page flow ----
+  const SCALE=2;
+  const pages=[]; let pg=null, y=0, sec=null;
+  const newPage=s=>{ sec=s; const c=document.createElement('canvas'); c.width=Math.round(s.w*SCALE); c.height=Math.round(s.h*SCALE);
+    const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); ctx.scale(SCALE,SCALE); ctx.textBaseline='alphabetic';
+    pg={ canvas:c, ctx, sec:s, wPt:s.w, hPt:s.h }; pages.push(pg); y=s.mt; };
+  const atTop=()=>y<=sec.mt+0.01;
+  const bottom=()=>sec.h-sec.mb;
+  const env={ imgs:docImgs, pitch:0 };
+  let done=0; const totalBlocks=sections.reduce((a,s)=>a+s.blocks.length,0);
+  for (const S of sections){
+    newPage(S.sec); env.pitch=S.sec.pitch;
+    const cw=S.sec.w-S.sec.ml-S.sec.mr;
+    let prev=null;
+    for (let bi=0; bi<S.blocks.length; bi++){
+      const b=S.blocks[bi];
+      if (++done%25===0){ prog(`レイアウト ${Math.round(done/totalBlocks*100)}%`); await nextFrame(); }
+      if (b.localName==='p'){
+        const m=measurePara(b, cw, env);
+        const nb=S.blocks[bi+1];
+        if (m.P.contextualSpacing && prev && prev.sid===m.sid) m.before=0;
+        if (m.P.contextualSpacing && nb && nb.localName==='p'){ const nE=effP(wParsePPr(wk(nb,'pPr'))); if (nE.sid===m.sid) m.after=0; }
+        if (m.P.pageBreakBefore && !atTop()) newPage(sec);
+        if (m.P.keepNext && !atTop() && y+m.before+m.h+30>bottom()) newPage(sec);
+        if (!atTop()) y+=m.before;
+        if (m.P.bdr && m.P.bdr.top){ borderLine(pg.ctx, m.P.bdr.top, sec.ml+m.left, y, sec.ml+cw-m.right, y); y+=m.P.bdr.top.sp+m.P.bdr.top.w; }
+        for (const L of m.lines){
+          if (y+L.h>bottom()+0.01 && !atTop()) newPage(sec);
+          drawLine(pg.ctx, L, m, sec.ml, y); y+=L.h;
+          if (L.page) newPage(sec);
+        }
+        if (m.P.bdr && m.P.bdr.bottom){ y+=m.P.bdr.bottom.sp; borderLine(pg.ctx, m.P.bdr.bottom, sec.ml+m.left, y, sec.ml+cw-m.right, y); y+=m.P.bdr.bottom.w; }
+        y+=m.after; prev=m;
+      } else {
+        const T=measureTable(b, cw, env);
+        const head=T.rows.map((r,i)=>r.header ? i : -1).filter(i=>i>=0);
+        for (let r=0;r<T.rows.length;r++){
+          if (y+T.rows[r].h>bottom()+0.01 && !atTop()){
+            newPage(sec);
+            if (!T.rows[r].header) for (const hi of head){ drawRow(pg.ctx, T, hi, sec.ml, y); y+=T.rows[hi].h; }
+          }
+          drawRow(pg.ctx, T, r, sec.ml, y); y+=T.rows[r].h;
+        }
+        prev=null;
+      }
+    }
+  }
+
+  // ---- headers & footers (ページ番号はここで入る) ----
+  prog('ヘッダー・フッター');
+  const partCache={};
+  const part=async rid=>{
+    if (!rid) return null; if (partCache[rid]!==undefined) return partCache[rid];
+    const r=docRels[rid]; if (!r || !r.target){ partCache[rid]=null; return null; }
+    const xml=await xmlOf(r.target); if (!xml){ partCache[rid]=null; return null; }
+    const rels=await relsOf(r.target); const imgs=await loadImages(xml, rels);
+    return (partCache[rid]={ root:xml.documentElement, imgs });
+  };
+  const firstOfSec=new Set(); pages.forEach((p,i)=>{ if (i===0 || pages[i-1].sec!==p.sec) firstOfSec.add(i); });
+  for (let i=0;i<pages.length;i++){
+    const p=pages[i], s=p.sec, cw=s.w-s.ml-s.mr;
+    const kind = s.titlePg && firstOfSec.has(i) ? 'first' : 'default';
+    const hp=await part(kind==='first' ? s.hdr.first : s.hdr.default), fp=await part(kind==='first' ? s.ftr.first : s.ftr.default);
+    const henv={ imgs:hp ? hp.imgs : {}, page:i+1, total:pages.length, pitch:0, noNum:true };
+    if (hp){ const B=measureBlocks(wk(hp.root,'hdr')||hp.root, cw, henv); drawBlocks(p.ctx, B, s.ml, s.hd); }
+    if (fp){ const fenv={ ...henv, imgs:fp.imgs, fld:null }; const B=measureBlocks(wk(fp.root,'ftr')||fp.root, cw, fenv); drawBlocks(p.ctx, B, s.ml, s.h-s.fd-B.h); }
+  }
+  for (const u of urls) URL.revokeObjectURL(u);
+  return pages.map(p=>({ canvas:p.canvas, wPt:p.wPt, hPt:p.hPt }));
 }
 
 /* ----- Excel ----- */
