@@ -411,9 +411,9 @@ const pinchSpacer = document.createElement('div');   // 拡大縮小の途中で
 pinchSpacer.style.cssText='position:absolute;left:0;top:0;width:1px;height:1px;pointer-events:none;visibility:hidden';
 scroller.appendChild(pinchSpacer);
 const live = document.createElement('canvas'); live.className = 'live';
-const lctx = live.getContext('2d');
+const lctx = live.getContext('2d', { desynchronized:true }) || live.getContext('2d');   // 対応する環境では画面への反映を待たずに描く（遅れを減らす）
 const tipc = document.createElement('canvas'); tipc.className = 'live';   // 書いている先端だけを描く小さな層
-const tctx = tipc.getContext('2d');
+const tctx = tipc.getContext('2d', { desynchronized:true }) || tipc.getContext('2d');
 let tipBox = null;
 let livePage = null;
 
@@ -578,7 +578,9 @@ async function requestRender(){
     const mid = scroller.scrollTop + scroller.clientHeight/2;
     const list=[...visible].filter(p=>D.pages.includes(p))
       .sort((a,b)=>Math.abs(a.el.offsetTop+a.el.offsetHeight/2-mid)-Math.abs(b.el.offsetTop+b.el.offsetHeight/2-mid));
-    for (const p of list){ if (pinching()) break; await renderPage(p); if (renderAgain) break; }
+    for (const p of list){ if (pinching()) break;
+      while (cur && (cur.mode==='ink' || cur.mode==='erase')) await new Promise(r=>setTimeout(r,90));   // 書いている最中はページの描き直しを待たせて、ペン先の動きを優先する
+      await renderPage(p); if (renderAgain) break; }
   } while (renderAgain);
   rendering=false;
 }
@@ -1509,7 +1511,7 @@ async function openDoc(bytes, name){   // 新しいタブで開く
     try { await buildDoc(doc, bytes, null); }
     catch(err){ if (prev){ await loadInto(prev); showDoc(prev); } throw err; }
     docs.push(doc); showDoc(doc);
-    if (bytes) await kvPut('bytes:'+doc.id, bytes);
+    if (bytes && !(await kvPut('bytes:'+doc.id, bytes))) saveFailed();
     await saveMeta(doc); await saveTabs();
     return doc;
   } finally { tabBusy=false; }
@@ -1614,11 +1616,15 @@ function metaOf(doc){
     pages:(doc.pages||[]).map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h,
       strokes:p.strokes.map(serStroke) })) };
 }
-async function saveMeta(doc){ if (doc && doc.id && doc.pages) await kvPut('doc:'+doc.id, metaOf(doc)); }
+// 保存に失敗したら一度だけ知らせる（空き容量不足など。気づかないまま書き込みを失わないように）
+let saveWarned=false;
+function saveFailed(){ if (saveWarned) return; saveWarned=true; toast('この端末に書き込みを保存できませんでした（空き容量不足の可能性）。「書き出し」でPDFを保存してください', 9000); }
+async function saveMeta(doc){ if (doc && doc.id && doc.pages){ const ok=await kvPut('doc:'+doc.id, metaOf(doc)); if (ok) saveWarned=false; else saveFailed(); return ok; } return true; }
 function saveTabs(){ return kvPut('tabs', { list:docs.map(d=>({ id:d.id, name:d.name, hasBytes:d.hasBytes })), active:D.id }); }
-function scheduleSave(ms=700){ clearTimeout(saveT); saveT=setTimeout(()=>{ saveMeta(D); }, ms); }
+function scheduleSave(ms=400){ clearTimeout(saveT); saveT=setTimeout(()=>{ if (cur){ scheduleSave(250); return; } saveMeta(D); }, ms); }   // 書いている最中は保存を後回しにする
 function changed(){ syncUI(); scheduleSave(); }
-document.addEventListener('visibilitychange', ()=>{ if (document.hidden && D.id){ clearTimeout(saveT); saveMeta(D); } });
+document.addEventListener('visibilitychange', ()=>{ if (document.hidden && D.id){ if (cur) finish(false); clearTimeout(saveT); saveMeta(D); saveTabs(); } });
+window.addEventListener('pagehide', ()=>{ if (D.id){ clearTimeout(saveT); saveMeta(D); saveTabs(); } });
 async function restore(){
   let tabs=await kvGet('tabs');
   if (!tabs || !tabs.list || !tabs.list.length){           // 以前の版（タブなし）で保存した書き込みを引き継ぐ
@@ -1635,7 +1641,7 @@ async function restore(){
   const order=[docs.find(d=>d.id===tabs.active), ...docs].filter((d,i,a)=>d && a.indexOf(d)===i);
   for (const d of order){
     try { await loadInto(d); showDoc(d); return true; }
-    catch(e){ console.error(e); docs=docs.filter(x=>x!==d); }
+    catch(e){ console.error(e); docs=docs.filter(x=>x!==d); saveTabs(); }   // 読めなかったタブは一覧から外す（次回も同じ失敗をしない）
   }
   return false;
 }
@@ -2278,7 +2284,433 @@ async function renderDocx(buf, prog){
 }
 
 /* ----- Excel ----- */
+/* ----- Excel：ブックの中身（XML）を直接読んで、印刷時と同じようにページごとに描く（外部の変換部品を使わない） ----- */
+const X_IDX=['000000','FFFFFF','FF0000','00FF00','0000FF','FFFF00','FF00FF','00FFFF','000000','FFFFFF','FF0000','00FF00','0000FF','FFFF00','FF00FF','00FFFF',
+  '800000','008000','000080','808000','800080','008080','C0C0C0','808080','9999FF','993366','FFFFCC','CCFFFF','660066','FF8080','0066CC','CCCCFF',
+  '000080','FF00FF','FFFF00','00FFFF','800080','800000','008080','0000FF','00CCFF','CCFFFF','CCFFCC','FFFF99','99CCFF','FF99CC','CC99FF','FFCC99',
+  '3366FF','33CCCC','99CC00','FFCC00','FF9900','FF6600','666699','969696','003366','339966','003300','333300','993300','993366','333399','333333'];
+const xk=(el,n)=>{ if (!el) return null; for (const c of el.children) if (c.localName===n) return c; return null; };
+const xks=(el,n)=>el ? [...el.children].filter(c=>c.localName===n) : [];
+const xall=(el,n)=>el ? [...el.getElementsByTagNameNS('*',n)] : [];
+const xnum=(v,d)=>{ const n=parseFloat(v); return isFinite(n) ? n : d; };
+const xOn=v=>v!=null && v!=='0' && v!=='false';
+function xColIdx(s){ let n=0; for (const ch of s.toUpperCase()) { const c=ch.charCodeAt(0); if (c<65||c>90) break; n=n*26+(c-64); } return n-1; }
+function xRef(a){ const m=/^\$?([A-Za-z]+)\$?(\d+)$/.exec(a.trim()); return m ? { c:xColIdx(m[1]), r:+m[2]-1 } : null; }
+function xRange(s){ const [a,b]=s.split(':'); const A=xRef(a), B=b ? xRef(b) : A; if (!A||!B) return null;
+  return { r0:Math.min(A.r,B.r), c0:Math.min(A.c,B.c), r1:Math.max(A.r,B.r), c1:Math.max(A.c,B.c) }; }
+function xTint(hex, t){
+  if (!t) return hex; const [h,s,l]=rgb2hsl(hexToArr(hex)); const L = t<0 ? l*(1+t) : l*(1-t)+t;
+  return '#'+hsl2rgb(h,s,Math.max(0,Math.min(1,L))).map(v=>Math.round(v).toString(16).padStart(2,'0')).join('');
+}
+/* 表示形式 */
+const X_BUILTIN={0:'General',1:'0',2:'0.00',3:'#,##0',4:'#,##0.00',5:'"¥"#,##0;"¥"\\-#,##0',6:'"¥"#,##0;[Red]"¥"\\-#,##0',7:'"¥"#,##0.00;"¥"\\-#,##0.00',8:'"¥"#,##0.00;[Red]"¥"\\-#,##0.00',
+  9:'0%',10:'0.00%',11:'0.00E+00',12:'# ?/?',13:'# ??/??',14:'yyyy/m/d',15:'d-mmm-yy',16:'d-mmm',17:'mmm-yy',18:'h:mm AM/PM',19:'h:mm:ss AM/PM',20:'h:mm',21:'h:mm:ss',22:'yyyy/m/d h:mm',
+  27:'[$-411]ge.m.d',28:'[$-411]ggge"年"m"月"d"日"',29:'[$-411]ggge"年"m"月"d"日"',30:'m/d/yy',31:'yyyy"年"m"月"d"日"',32:'h"時"mm"分"',33:'h"時"mm"分"ss"秒"',34:'yyyy"年"m"月"',35:'m"月"d"日"',36:'[$-411]ge.m.d',
+  37:'#,##0 ;(#,##0)',38:'#,##0 ;[Red](#,##0)',39:'#,##0.00;(#,##0.00)',40:'#,##0.00;[Red](#,##0.00)',45:'mm:ss',46:'[h]:mm:ss',47:'mmss.0',48:'##0.0E+0',49:'@',
+  50:'[$-411]ge.m.d',51:'[$-411]ggge"年"m"月"d"日"',52:'yyyy"年"m"月"',53:'m"月"d"日"',54:'[$-411]ggge"年"m"月"d"日"',55:'yyyy"年"m"月"',56:'m"月"d"日"',57:'[$-411]ge.m.d',58:'[$-411]ggge"年"m"月"d"日"'};
+const X_COLORS={ red:'#ff0000', blue:'#0000ff', black:'#000000', green:'#00a000', magenta:'#ff00ff', cyan:'#00ffff', yellow:'#ffff00', white:'#ffffff' };
+const X_ERAS=[[Date.UTC(2019,4,1),'R','令','令和'],[Date.UTC(1989,0,8),'H','平','平成'],[Date.UTC(1926,11,25),'S','昭','昭和'],[Date.UTC(1912,6,30),'T','大','大正'],[Date.UTC(1868,0,25),'M','明','明治']];
+function xSections(code){ const out=[]; let cur='', q=false;
+  for (let i=0;i<code.length;i++){ const ch=code[i];
+    if (ch==='"'){ q=!q; cur+=ch; } else if (ch==='\\' && !q){ cur+=ch+(code[i+1]||''); i++; }
+    else if (ch===';' && !q){ out.push(cur); cur=''; } else cur+=ch; }
+  out.push(cur); return out; }
+function xTokens(sec){   // [{lit}|{br:'..'}|{raw:'..'}]
+  const out=[]; let i=0;
+  while (i<sec.length){ const ch=sec[i];
+    if (ch==='"'){ const j=sec.indexOf('"',i+1); out.push({lit:sec.slice(i+1, j<0?sec.length:j)}); i= j<0?sec.length:j+1; }
+    else if (ch==='\\'){ out.push({lit:sec[i+1]||''}); i+=2; }
+    else if (ch==='_'){ out.push({lit:' '}); i+=2; }
+    else if (ch==='*'){ i+=2; }
+    else if (ch==='['){ const j=sec.indexOf(']',i); out.push({br:sec.slice(i+1, j<0?sec.length:j)}); i= j<0?sec.length:j+1; }
+    else { out.push({raw:ch}); i++; } }
+  return out; }
+function xIsDate(code){ const t=xTokens(code.split(';')[0]); return t.some(k=>k.raw && /[ymdhsgea]/i.test(k.raw)) && !t.some(k=>k.raw && /[0#?]/.test(k.raw)); }
+function xGeneral(v){
+  if (Number.isInteger(v) && Math.abs(v)<1e11) return String(v);
+  const a=Math.abs(v); if (a!==0 && (a<1e-9 || a>=1e11)) return v.toExponential(5).replace(/\.?0+e/,'E').replace('E+','E+').replace(/e/,'E');
+  return String(parseFloat(v.toPrecision(11)));
+}
+function xFmtDate(v, toks, date1904){
+  const ms=Math.round(((date1904?v+1462:v)-25569)*86400000), d=new Date(ms);
+  const Y=d.getUTCFullYear(), M=d.getUTCMonth()+1, D=d.getUTCDate(), h=d.getUTCHours(), mi=d.getUTCMinutes(), s=d.getUTCSeconds(), wd=d.getUTCDay();
+  const ampm=toks.some(k=>k.raw && /a/i.test(k.raw)) && toks.map(k=>k.raw||'').join('').toUpperCase().includes('AM/PM');
+  const era=X_ERAS.find(e=>ms>=e[0]) || X_ERAS[X_ERAS.length-1], eraY=Y-new Date(era[0]).getUTCFullYear()+1;
+  // まとまった記号の列に分け直す
+  let raw='', out=''; const runs=[];
+  for (const k of toks){ if (k.raw!=null){ raw+=k.raw; } else { if (raw){ runs.push({raw}); raw=''; } runs.push(k); } }
+  if (raw) runs.push({raw});
+  let lastH=false;
+  for (const r of runs){
+    if (r.lit!=null){ out+=r.lit; continue; }
+    if (r.br!=null){ const b=r.br; if (/^h+$/i.test(b)) out+=String(Math.floor(v*24)); else if (/^m+$/i.test(b)) out+=String(Math.floor(v*1440)); else if (b[0]==='$'){ const c=b.slice(1).split('-')[0]; out+=c; } continue; }
+    const re=/(yyyy|yy|e+|g{1,3}|mmmm|mmm|mm|m|dddd|ddd|dd|d|aaaa|aaa|hh|h|ss|s|AM\/PM|A\/P|.)/gi; let m;
+    const parts=[]; while ((m=re.exec(r.raw))) parts.push(m[1]);
+    for (let i=0;i<parts.length;i++){ const p=parts[i], P=p.toLowerCase();
+      const nextIsS = ()=>{ for (let j=i+1;j<parts.length;j++){ const q=parts[j].toLowerCase(); if (/^[ymdh]/.test(q)) return false; if (/^s/.test(q)) return true; } return false; };
+      if (P==='yyyy') out+=Y; else if (P==='yy') out+=String(Y%100).padStart(2,'0');
+      else if (P[0]==='e') out+= P.length>1 ? String(eraY).padStart(2,'0') : eraY;
+      else if (P[0]==='g') out+= era[P.length];
+      else if (P==='mmmm') out+=['January','February','March','April','May','June','July','August','September','October','November','December'][M-1];
+      else if (P==='mmm') out+=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][M-1];
+      else if (P==='mm'||P==='m'){ const isMin = lastH || nextIsS(); const val=isMin?mi:M; out+= P==='mm' ? String(val).padStart(2,'0') : val; }
+      else if (P==='dddd') out+=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][wd];
+      else if (P==='ddd') out+=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][wd];
+      else if (P==='dd') out+=String(D).padStart(2,'0'); else if (P==='d') out+=D;
+      else if (P==='aaaa') out+='日月火水木金土'[wd]+'曜日'; else if (P==='aaa') out+='日月火水木金土'[wd];
+      else if (P==='hh'||P==='h'){ let hh=h; if (ampm){ hh=h%12||12; } out+= P==='hh' ? String(hh).padStart(2,'0') : hh; lastH=true; continue; }
+      else if (P==='ss') out+=String(s).padStart(2,'0'); else if (P==='s') out+=s;
+      else if (P==='am/pm') out+= h<12?'AM':'PM'; else if (P==='a/p') out+= h<12?'A':'P';
+      else out+=p;
+      if (/[a-z]/i.test(p)) lastH=false;
+    }
+  }
+  return out;
+}
+function xFmtNum(v, toks, neg){
+  let pre='', pat='', post='', state=0, pct=0, sci=false;
+  for (const k of toks){
+    if (k.br!=null){ if (k.br[0]==='$'){ const c=k.br.slice(1).split('-')[0]; if (state===0) pre+=c; else post+=c; } continue; }
+    if (k.lit!=null){ if (state===0) pre+=k.lit; else { state=Math.max(state,2); post+=k.lit; } continue; }
+    const ch=k.raw;
+    if (state<2 && /[0#?]/.test(ch)){ pat+=ch; state=1; continue; }
+    if (state===1 && /[.,]/.test(ch)){ pat+=ch; continue; }
+    if (state===1 && /[eE]/.test(ch)){ sci=true; state=3; continue; }
+    if (state===3 && /[+\-0#]/.test(ch)) continue;
+    if (ch==='%') pct++;
+    if (ch==='@') continue;
+    if (state===0) pre+=ch; else { state=Math.max(state,2); post+=ch; }
+  }
+  if (!pat) return (neg?'-':'')+pre+post;
+  v=Math.abs(v)*Math.pow(100,pct);
+  while (pat.endsWith(',')){ pat=pat.slice(0,-1); v/=1000; }
+  const hasDot=pat.includes('.'), [ip, dp='']=pat.split('.'), group=ip.includes(',');
+  const minInt=(ip.match(/0/g)||[]).length, req=(dp.match(/0/g)||[]).length, all=(dp.match(/[0#?]/g)||[]).length;
+  let s;
+  if (sci){ const e=v.toExponential(Math.max(0,all)).split('e'); const ex=parseInt(e[1],10); s=e[0]+'E'+(ex<0?'-':'+')+String(Math.abs(ex)).padStart(2,'0'); }
+  else {
+    let [a,b='']=v.toFixed(all).split('.');
+    while (b.length>req && b.endsWith('0')) b=b.slice(0,-1);
+    a = (minInt===0 && a==='0') ? '' : a.padStart(minInt,'0');
+    if (group) a=a.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    s=a+(b ? '.'+b : '');
+    if (s==='' ) s= hasDot||minInt ? '0' : '';
+  }
+  return (neg?'-':'')+pre+s+post;
+}
+function xFormat(v, code, date1904){
+  if (code==null || /^general$/i.test(code)) return { t:xGeneral(v) };
+  const secs=xSections(code); let idx=0, explicitNeg=false;
+  const cond=s=>{ const m=/\[(<=|>=|<>|<|>|=)(-?[\d.]+)\]/.exec(s); return m ? [m[1], parseFloat(m[2])] : null; };
+  const c0=cond(secs[0]);
+  if (c0){ const [op,n]=c0, ok={'<':v<n,'>':v>n,'<=':v<=n,'>=':v>=n,'=':v===n,'<>':v!==n}[op]; idx= ok?0:1; explicitNeg=idx===1; }
+  else if (v<0 && secs.length>1){ idx=1; explicitNeg=true; } else if (v===0 && secs.length>2) idx=2;
+  const sec=secs[idx]||secs[0]; const toks=xTokens(sec);
+  let color=null; for (const k of toks) if (k.br && X_COLORS[k.br.toLowerCase()]) color=X_COLORS[k.br.toLowerCase()];
+  if (/^\s*general\s*$/i.test(sec.replace(/\[[^\]]*\]/g,''))) return { t:xGeneral(explicitNeg?Math.abs(v):v), color };
+  if (xIsDate(sec)) return { t:xFmtDate(v, toks, date1904), color };
+  if (toks.some(k=>k.raw==='@')) return { t:String(v), color };
+  return { t:xFmtNum(v, toks, v<0 && !explicitNeg), color };
+}
+function xFontCss(f){
+  const fam=f.name||''; let stack=W_SANS;
+  if (/明朝|Mincho|Serif|Times|Century/i.test(fam)) stack=W_SERIF;
+  return `${f.i?'italic ':''}${f.b?'700 ':''}${f.sz}px ${/[ぁ-んァ-ン一-龥]/.test(fam)||/Yu|Meiryo|Hiragino|MS /i.test(fam) ? stack : `"${fam}",${stack}`}`;
+}
+
 async function renderXlsx(buf, prog){
+  await loadScript(LIBS.jszip);
+  const zip=await JSZip.loadAsync(buf);
+  const P=new DOMParser();
+  const xml=async p=>{ const f=zip.file(p); return f ? P.parseFromString(await f.async('string'), 'application/xml') : null; };
+  const rels=async p=>{ const dir=p.includes('/')?p.slice(0,p.lastIndexOf('/')):'', base=p.slice(p.lastIndexOf('/')+1);
+    const d=await xml((dir?dir+'/':'')+'_rels/'+base+'.rels'), m={}; if (!d) return m;
+    for (const r of xall(d,'Relationship')) m[r.getAttribute('Id')]={ t:joinPath(dir, r.getAttribute('Target')), type:r.getAttribute('Type')||'', ext:r.getAttribute('TargetMode')==='External' };
+    return m; };
+  prog('ブックを読み込み中');
+  const wb=await xml('xl/workbook.xml'); if (!wb) throw new Error('Excelファイルの中身が見つかりませんでした');
+  const wbRels=await rels('xl/workbook.xml');
+  const wbPr=xall(wb,'workbookPr')[0], date1904=!!(wbPr && xOn(wbPr.getAttribute('date1904')));
+  // テーマの色
+  const theme=[]; { const th=await xml('xl/theme/theme1.xml'); const cs=th && xall(th,'clrScheme')[0];
+    if (cs){ const get=n=>{ const e=xk(cs,n); const c=e && e.firstElementChild; return c ? (c.getAttribute('lastClr')||c.getAttribute('val')||'000000') : '000000'; };
+      for (const n of ['lt1','dk1','lt2','dk2','accent1','accent2','accent3','accent4','accent5','accent6','hlink','folHlink']) theme.push(get(n)); }
+    else theme.push('FFFFFF','000000','E7E6E6','44546A','4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47','0563C1','954F72'); }
+  const colorOf=(el, dflt)=>{ if (!el) return dflt;
+    let hex=null;
+    if (el.getAttribute('rgb')) hex=el.getAttribute('rgb').slice(-6);
+    else if (el.getAttribute('theme')!=null) hex=theme[+el.getAttribute('theme')]||'000000';
+    else if (el.getAttribute('indexed')!=null){ const i=+el.getAttribute('indexed'); hex= i===64 ? '000000' : i===65 ? 'FFFFFF' : X_IDX[i]||null; }
+    else if (el.getAttribute('auto')) hex='000000';
+    if (!hex) return dflt; return xTint('#'+hex, xnum(el.getAttribute('tint'),0)); };
+  // 文字列
+  const sst=[]; { const d=await xml('xl/sharedStrings.xml');
+    if (d) for (const si of xks(d.documentElement,'si')){ let t=''; for (const e of xall(si,'t')){ let p=e.parentNode; let skip=false; while (p && p!==si){ if (p.localName==='rPh') { skip=true; break; } p=p.parentNode; } if (!skip) t+=e.textContent; } sst.push(t); } }
+  // スタイル
+  const st=await xml('xl/styles.xml'); const numFmts={}, fonts=[], fills=[], borders=[], xfs=[];
+  if (st){ const R=st.documentElement;
+    for (const n of xks(xk(R,'numFmts'),'numFmt')) numFmts[+n.getAttribute('numFmtId')]=n.getAttribute('formatCode');
+    for (const f of xks(xk(R,'fonts'),'font')){ const v=n=>{ const e=xk(f,n); return e ? (e.getAttribute('val')==null ? true : e.getAttribute('val')) : null; };
+      fonts.push({ sz:xnum(v('sz'),11), b:xOn(v('b')===true?'1':v('b')), i:xOn(v('i')===true?'1':v('i')), u:!!v('u') && v('u')!=='none', s:xOn(v('strike')===true?'1':v('strike')),
+        color:colorOf(xk(f,'color'), '#000000'), name:v('name')||'' }); }
+    for (const f of xks(xk(R,'fills'),'fill')){ const pf=xk(f,'patternFill'); let c=null;
+      if (pf){ const t=pf.getAttribute('patternType'); if (t && t!=='none'){ c=colorOf(xk(pf,'fgColor'), null) || colorOf(xk(pf,'bgColor'), null);
+        if (t==='gray125') c='#ececec'; else if (t==='gray0625') c='#f4f4f4'; } }
+      else { const g=xk(f,'gradientFill'); const s=g && xall(g,'stop')[0]; if (s) c=colorOf(xk(s,'color'), null); }
+      fills.push(c); }
+    const BW={ thin:[0.6], hair:[0.4,[0.6,1]], dotted:[0.6,[0.8,1.4]], dashed:[0.6,[3,1.6]], medium:[1.4], mediumDashed:[1.4,[4,2]], dashDot:[0.6,[3,1.4,0.8,1.4]],
+      mediumDashDot:[1.4,[4,2,1.2,2]], dashDotDot:[0.6,[3,1.2,0.8,1.2,0.8,1.2]], mediumDashDotDot:[1.4,[4,1.6,1.2,1.6,1.2,1.6]], slantDashDot:[1.4,[4,1.6,1.2,1.6]], thick:[2.2], double:[0.5,null,true] };
+    for (const b of xks(xk(R,'borders'),'border')){ const o={};
+      for (const [k,n] of [['l','left'],['r','right'],['t','top'],['b','bottom'],['l','start'],['r','end']]){ const e=xk(b,n); const s=e && e.getAttribute('style');
+        if (s && s!=='none' && BW[s]){ const [w,dash,dbl]=BW[s]; o[k]={ w, dash:dash||null, dbl:!!dbl, color:colorOf(xk(e,'color'),'#000000') }; } }
+      borders.push(o); }
+    for (const x of xks(xk(R,'cellXfs'),'xf')){ const a=xk(x,'alignment'), id=+x.getAttribute('numFmtId')||0;
+      xfs.push({ font:fonts[+x.getAttribute('fontId')||0]||fonts[0], fill:fills[+x.getAttribute('fillId')||0]||null, border:borders[+x.getAttribute('borderId')||0]||{},
+        fmt: numFmts[id]!=null ? numFmts[id] : X_BUILTIN[id], ha:a&&a.getAttribute('horizontal')||'general', va:a&&a.getAttribute('vertical')||'bottom',
+        wrap:!!a&&xOn(a.getAttribute('wrapText')), shrink:!!a&&xOn(a.getAttribute('shrinkToFit')), indent:a?xnum(a.getAttribute('indent'),0):0, rot:a?xnum(a.getAttribute('textRotation'),0):0 }); } }
+  if (!fonts.length) fonts.push({ sz:11, color:'#000000', name:'' });
+  if (!xfs.length) xfs.push({ font:fonts[0], fill:null, border:{}, fmt:'General', ha:'general', va:'bottom' });
+  const dfont=fonts[0], jpFont=/[ぁ-んァ-ン一-龥]|Yu |Meiryo|MS /i.test(dfont.name||''), MDW=jpFont?8:7;
+  // 印刷範囲
+  const printArea={}; for (const dn of xall(wb,'definedName')) if (dn.getAttribute('name')==='_xlnm.Print_Area' && dn.getAttribute('localSheetId')!=null){
+    const t=dn.textContent.split(',')[0]; const r=xRange(t.slice(t.lastIndexOf('!')+1).replace(/'/g,'')); if (r) printArea[+dn.getAttribute('localSheetId')]=r; }
+  const pages=[]; const sheets=xall(wb,'sheet');
+  for (let si=0; si<sheets.length; si++){
+    const sh=sheets[si]; const state=sh.getAttribute('state'); if (state==='hidden'||state==='veryHidden') continue;
+    const name=sh.getAttribute('name'), rid=sh.getAttributeNS(R_NS,'id')||sh.getAttribute('r:id'), path=wbRels[rid] && wbRels[rid].t; if (!path) continue;
+    prog(`シート「${name}」`);
+    const d=await xml(path); if (!d) continue; const W=d.documentElement, sRels=await rels(path);
+    const fpr=xk(W,'sheetFormatPr'), baseCW=fpr?xnum(fpr.getAttribute('baseColWidth'),8):8;
+    const defColPx = fpr && fpr.getAttribute('defaultColWidth') ? Math.round(xnum(fpr.getAttribute('defaultColWidth'))*MDW) : Math.ceil((baseCW*MDW+5)/8)*8;
+    const defRowPt = fpr && fpr.getAttribute('defaultRowHeight') ? xnum(fpr.getAttribute('defaultRowHeight'),15) : (jpFont?18.75:15);
+    const colPx=new Map(); for (const c of xks(xk(W,'cols'),'col')){ const a=+c.getAttribute('min')-1, b=Math.min(+c.getAttribute('max')-1, 16383), hid=xOn(c.getAttribute('hidden'));
+      const px= hid ? 0 : (c.getAttribute('width')!=null ? Math.round(xnum(c.getAttribute('width'),0)*MDW) : defColPx); for (let i=a;i<=Math.min(b,a+300);i++) colPx.set(i, px); if (b>a+300) colPx.set('rest'+a, {from:a+301,to:b,px}); }
+    const rest=[...colPx.keys()].filter(k=>typeof k==='string').map(k=>colPx.get(k));
+    const cw=c=>{ if (colPx.has(c)) return colPx.get(c)*0.75; for (const r of rest) if (c>=r.from && c<=r.to) return r.px*0.75; return defColPx*0.75; };
+    const rowPt=new Map(), cells=new Map(); let maxR=-1, maxC=-1;
+    const key=(r,c)=>r*16384+c;
+    for (const row of xks(xk(W,'sheetData'),'row')){
+      const r=+row.getAttribute('r')-1; if (xOn(row.getAttribute('hidden'))) rowPt.set(r,0); else if (row.getAttribute('ht')!=null) rowPt.set(r, xnum(row.getAttribute('ht'),defRowPt));
+      const rowS=row.getAttribute('s')!=null && xOn(row.getAttribute('customFormat')) ? +row.getAttribute('s') : null;
+      let cc=-1;
+      for (const c of xks(row,'c')){
+        const ref=c.getAttribute('r'); const a= ref ? xRef(ref) : { r, c:cc+1 }; cc=a.c;
+        const t=c.getAttribute('t')||'n', xi=c.getAttribute('s')!=null ? +c.getAttribute('s') : (rowS!=null?rowS:0), xf=xfs[xi]||xfs[0];
+        const ve=xk(c,'v'); let text='', num=null, kind='s';
+        if (t==='s'){ text= ve ? (sst[+ve.textContent]??'') : ''; }
+        else if (t==='inlineStr'){ const is=xk(c,'is'); text= is ? xall(is,'t').filter(e=>!(e.parentNode && e.parentNode.localName==='rPh')).map(e=>e.textContent).join('') : ''; }
+        else if (t==='str'){ text= ve ? ve.textContent : ''; }
+        else if (t==='b'){ text= ve ? (ve.textContent==='1'?'TRUE':'FALSE') : ''; kind='b'; }
+        else if (t==='e'){ text= ve ? ve.textContent : ''; kind='e'; }
+        else if (ve && ve.textContent!==''){ num=parseFloat(ve.textContent); kind='n'; }
+        let color=null;
+        if (kind==='n' && isFinite(num)){ const f=xFormat(num, xf.fmt, date1904); text=f.t; color=f.color; }
+        else if (kind==='s' && xf.fmt && /@/.test(xf.fmt) && /"/.test(xf.fmt)){ const sec=xSections(xf.fmt); const s4=sec[3]||sec[0]; text=xTokens(s4).map(k=>k.lit!=null?k.lit:k.raw==='@'?text:'').join(''); }
+        const styled = !!xf.fill || Object.keys(xf.border).length>0;
+        if (!text && !styled) continue;
+        cells.set(key(a.r,a.c), { text, kind, xf, color });
+        if (text || styled){ if (a.r>maxR) maxR=a.r; if (a.c>maxC) maxC=a.c; }
+      }
+    }
+    const merges=xks(xk(W,'mergeCells'),'mergeCell').map(m=>xRange(m.getAttribute('ref'))).filter(Boolean);
+    for (const m of merges){ if (cells.has(key(m.r0,m.c0))){ maxR=Math.max(maxR,m.r1); maxC=Math.max(maxC,m.c1); } }
+    // 図・画像
+    const objs=[];
+    for (const dr of xks(W,'drawing')){
+      const p=sRels[dr.getAttributeNS(R_NS,'id')||dr.getAttribute('r:id')]; if (!p) continue;
+      const dd=await xml(p.t); if (!dd) continue; const dRels=await rels(p.t);
+      for (const an of [...dd.documentElement.children]){
+        const ln=an.localName; if (!/Anchor$/.test(ln)) continue;
+        const pos=e=>e ? { c:+(xk(e,'col')||{}).textContent||0, co:+(xk(e,'colOff')||{}).textContent/12700||0, r:+(xk(e,'row')||{}).textContent||0, ro:+(xk(e,'rowOff')||{}).textContent/12700||0 } : null;
+        const ext=xk(an,'ext'), o={ from:pos(xk(an,'from')), to:pos(xk(an,'to')), ext: ext ? { w:+ext.getAttribute('cx')/12700, h:+ext.getAttribute('cy')/12700 } : null };
+        if (ln==='absoluteAnchor'){ const ps=xk(an,'pos'); o.abs={ x:+ps.getAttribute('x')/12700, y:+ps.getAttribute('y')/12700 }; }
+        const pic=xk(an,'pic'), sp=xk(an,'sp');
+        if (pic){ const bl=xall(pic,'blip')[0]; const rr=bl && dRels[bl.getAttributeNS(R_NS,'embed')||bl.getAttribute('r:embed')];
+          const f=rr && zip.file(rr.t); if (!f) continue;
+          if (!o.ext){ const x=xall(pic,'ext').find(e=>e.getAttribute('cx')); if (x) o.ext={ w:+x.getAttribute('cx')/12700, h:+x.getAttribute('cy')/12700 }; }
+          try { const ext2=rr.t.split('.').pop().toLowerCase(); const blob=new Blob([await f.async('uint8array')], { type: ext2==='png'?'image/png':ext2==='gif'?'image/gif':'image/jpeg' });
+            o.img=await createImageBitmap(blob); objs.push(o); } catch(e){ /* EMFなど表示できない形式は省く */ }
+        } else if (sp){
+          const spPr=xk(sp,'spPr'), geom=xk(spPr,'prstGeom'), sty=xk(sp,'style');
+          const clr=e=>{ if (!e) return null; const c=e.firstElementChild; if (!c) return null; if (c.localName==='srgbClr') return '#'+c.getAttribute('val');
+            if (c.localName==='schemeClr'){ const m={bg1:0,tx1:1,bg2:2,tx2:3,lt1:0,dk1:1,lt2:2,dk2:3,accent1:4,accent2:5,accent3:6,accent4:7,accent5:8,accent6:9}[c.getAttribute('val')]; return m!=null ? '#'+theme[m] : null; }
+            if (c.localName==='sysClr') return '#'+(c.getAttribute('lastClr')||'000000'); return null; };
+          let fill=null, line=null, lw=0.75;
+          const sf=xk(spPr,'solidFill'); if (sf) fill=clr(sf); else if (!xk(spPr,'noFill') && sty) fill=clr(xk(sty,'fillRef'));
+          const ln2=xk(spPr,'ln'); if (ln2){ if (!xk(ln2,'noFill')){ line=clr(xk(ln2,'solidFill')) || (sty&&clr(xk(sty,'lnRef'))) || '#000000'; lw=xnum(ln2.getAttribute('w'),9525)/12700; } }
+          else if (sty) line=clr(xk(sty,'lnRef'));
+          const tb=xk(sp,'txBody'); const paras=tb ? xks(tb,'p').map(p=>xall(p,'t').map(t=>t.textContent).join('')) : [];
+          const rp=tb && xall(tb,'rPr')[0], sz=rp&&rp.getAttribute('sz') ? +rp.getAttribute('sz')/100 : 11, tc=rp ? clr(xk(rp,'solidFill')) : null;
+          const algn=tb && xall(tb,'pPr')[0] ? xall(tb,'pPr')[0].getAttribute('algn') : null, anc=tb && xk(tb,'bodyPr') ? xk(tb,'bodyPr').getAttribute('anchor') : null;
+          Object.assign(o, { shape: geom ? geom.getAttribute('prst') : 'rect', fill, line, lw, paras, sz, tc: tc || '#000000', algn, anc });
+          objs.push(o);
+        }
+      }
+    }
+    for (const o of objs){ const e=o.to||o.from; if (e){ maxR=Math.max(maxR, e.r); maxC=Math.max(maxC, e.c); } }
+    if (maxR<0) continue;
+    let rg=printArea[si] || { r0:0, c0:0, r1:Math.min(maxR, 2999), c1:Math.min(maxC, 120) };
+    if (!printArea[si]){ // 使っている左上から
+      let r0=1e9, c0=1e9; for (const k of cells.keys()){ const r=Math.floor(k/16384), c=k%16384; if (r<r0) r0=r; if (c<c0) c0=c; }
+      for (const o of objs){ const f=o.from; if (f){ r0=Math.min(r0,f.r); c0=Math.min(c0,f.c); } }
+      rg.r0=Math.min(r0===1e9?0:r0, rg.r1); rg.c0=Math.min(c0===1e9?0:c0, rg.c1); }
+    rg.r1=Math.min(rg.r1, rg.r0+2999); rg.c1=Math.min(rg.c1, rg.c0+120);
+    // 位置（シート全体の左上を原点にした pt）
+    const colX=[0]; for (let c=0;c<=rg.c1+1;c++) colX.push(colX[c]+cw(c));
+    const rowY=[0]; for (let r=0;r<=rg.r1+1;r++) rowY.push(rowY[r]+(rowPt.has(r)?rowPt.get(r):defRowPt));
+    const X=c=>colX[Math.min(c,colX.length-1)], Y=r=>rowY[Math.min(r,rowY.length-1)];
+    // 印刷の設定
+    const ps=xk(W,'pageSetup'), pm=xk(W,'pageMargins'), po=xk(W,'printOptions'), spr=xk(xk(W,'sheetPr'),'pageSetUpPr');
+    const paper={ 8:[841.89,1190.55], 9:[595.28,841.89], 11:[419.53,595.28], 12:[728.5,1031.81], 13:[515.91,728.5], 1:[612,792], 5:[612,1008] }[ps ? +ps.getAttribute('paperSize')||9 : 9] || [595.28,841.89];
+    const land= ps && ps.getAttribute('orientation')==='landscape';
+    const PW=land?paper[1]:paper[0], PH=land?paper[0]:paper[1];
+    const mg=k=>pm ? xnum(pm.getAttribute(k), k==='top'||k==='bottom'?0.75:0.7)*72 : (k==='top'||k==='bottom'?0.75:0.7)*72;
+    const ML=mg('left'), MR=mg('right'), MT=mg('top'), MB=mg('bottom'), AW=PW-ML-MR, AH=PH-MT-MB;
+    const contW=X(rg.c1+1)-X(rg.c0), contH=Y(rg.r1+1)-Y(rg.r0);
+    let sc= ps && ps.getAttribute('scale') ? xnum(ps.getAttribute('scale'),100)/100 : 1;
+    if (spr && xOn(spr.getAttribute('fitToPage'))){
+      const fw=ps && ps.getAttribute('fitToWidth')!=null ? +ps.getAttribute('fitToWidth') : 1, fh=ps && ps.getAttribute('fitToHeight')!=null ? +ps.getAttribute('fitToHeight') : 1;
+      sc=1; if (fw>0) sc=Math.min(sc, AW*fw/contW); if (fh>0) sc=Math.min(sc, AH*fh/contH); sc=Math.max(0.1, sc);
+    }
+    const rBreaks=new Set(xks(xk(W,'rowBreaks'),'brk').map(b=>+b.getAttribute('id'))), cBreaks=new Set(xks(xk(W,'colBreaks'),'brk').map(b=>+b.getAttribute('id')));
+    const split=(a,b,pos,avail,brk)=>{ const out=[]; let s=a, used=0;
+      for (let i=a;i<=b;i++){ const sz=(pos(i+1)-pos(i))*sc; if (i>s && used+sz>avail+0.01){ out.push([s,i-1]); s=i; used=0; } used+=sz; if (brk.has(i+1) && i<b){ out.push([s,i]); s=i+1; used=0; } }
+      out.push([s,b]); return out; };
+    const rGroups=split(rg.r0, rg.r1, Y, AH, rBreaks), cGroups=split(rg.c0, rg.c1, X, AW, cBreaks);
+    const order=[]; if (ps && ps.getAttribute('pageOrder')==='overThenDown'){ for (const rr of rGroups) for (const cc of cGroups) order.push([rr,cc]); } else { for (const cc of cGroups) for (const rr of rGroups) order.push([rr,cc]); }
+    const hCenter=po && xOn(po.getAttribute('horizontalCentered')), vCenter=po && xOn(po.getAttribute('verticalCentered')), grid=po && xOn(po.getAttribute('gridLines'));
+    // 結合セル
+    const mOf=new Map(); for (const m of merges) for (let r=m.r0;r<=m.r1;r++) for (let c=m.c0;c<=m.c1;c++) mOf.set(key(r,c), m);
+    const cellAt=(r,c)=>cells.get(key(r,c));
+    const K=2.5;   // 1pt あたりのピクセル
+    const mc=document.createElement('canvas').getContext('2d');
+    for (const [[ra,rb],[ca,cb]] of order){
+      const cv=document.createElement('canvas'); cv.width=Math.round(PW*K); cv.height=Math.round(PH*K);
+      const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+      const gw=(X(cb+1)-X(ca))*sc, gh=(Y(rb+1)-Y(ra))*sc;
+      const ox=ML+(hCenter?Math.max(0,(AW-gw)/2):0), oy=MT+(vCenter?Math.max(0,(AH-gh)/2):0);
+      ctx.setTransform(K*sc,0,0,K*sc,K*(ox-X(ca)*sc),K*(oy-Y(ra)*sc));
+      ctx.save(); ctx.beginPath(); ctx.rect(X(ca),Y(ra),X(cb+1)-X(ca),Y(rb+1)-Y(ra)); ctx.clip();
+      const rectOf=(r,c)=>{ const m=mOf.get(key(r,c)); return m ? [X(m.c0),Y(m.r0),X(m.c1+1)-X(m.c0),Y(m.r1+1)-Y(m.r0),m] : [X(c),Y(r),X(c+1)-X(c),Y(r+1)-Y(r),null]; };
+      const rA=Math.max(0,ra-1), cA=Math.max(0,ca-1);
+      // 塗り
+      for (let r=rA;r<=rb;r++) for (let c=cA;c<=cb;c++){ const m=mOf.get(key(r,c)); if (m && (m.r0!==r||m.c0!==c)) continue;
+        const cl=cellAt(r,c); if (!cl || !cl.xf.fill) continue; const [x,y,w,h]=rectOf(r,c); ctx.fillStyle=cl.xf.fill; ctx.fillRect(x,y,w,h); }
+      if (grid){ ctx.strokeStyle='#c8c8c8'; ctx.lineWidth=0.5/sc; ctx.beginPath();
+        for (let r=ra;r<=rb+1;r++){ ctx.moveTo(X(ca),Y(r)); ctx.lineTo(X(cb+1),Y(r)); } for (let c=ca;c<=cb+1;c++){ ctx.moveTo(X(c),Y(ra)); ctx.lineTo(X(c),Y(rb+1)); } ctx.stroke(); }
+      // 文字
+      const empty=(r,c)=>{ const cl=cellAt(r,c); return !(cl && cl.text) && !mOf.has(key(r,c)); };
+      for (let r=rA;r<=rb;r++) for (let c=Math.max(0,ca-12);c<=Math.min(cb+12, rg.c1);c++){
+        const cl=cellAt(r,c); if (!cl || !cl.text) continue; const m=mOf.get(key(r,c)); if (m && (m.r0!==r||m.c0!==c)) continue;
+        if (!m && (r<ra||r>rb)) continue;
+        let [x,y,w,h]=rectOf(r,c); const xf=cl.xf, f=xf.font||dfont;
+        let fs=f.sz*1; ctx.font=xFontCss({...f, sz:fs}); ctx.fillStyle=cl.color||f.color||'#000000';
+        let ha=xf.ha; if (ha==='general') ha= cl.kind==='n' ? 'right' : (cl.kind==='b'||cl.kind==='e') ? 'center' : 'left';
+        if (ha==='centerContinuous') ha='center'; if (ha==='fill'||ha==='justify') ha='left';
+        const pad=2+(xf.indent||0)*fs*0.9;
+        const lines=String(cl.text).split(/\r?\n/);
+        if (xf.rot===255){   // 縦書き（1文字ずつ縦に並べる）
+          const chars=[...cl.text.replace(/\n/g,'')], lh=fs*1.1; ctx.textAlign='center'; ctx.textBaseline='middle';
+          let ty= xf.va==='top' ? y+lh/2+1 : xf.va==='center'||xf.va==='distributed' ? y+h/2-(chars.length-1)*lh/2 : y+h-lh/2-1 - (chars.length-1)*lh;
+          ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip(); for (const ch of chars){ ctx.fillText(ch, x+w/2, ty); ty+=lh; } ctx.restore(); continue; }
+        let L=[];
+        if (xf.wrap){ for (const ln of lines){ let cur=''; for (const ch of [...ln]){ if (cur && ctx.measureText(cur+ch).width>w-pad*2){ L.push(cur); cur= ch===' '?'':ch; } else cur+=ch; } L.push(cur); } }
+        else L=lines;
+        let tw=Math.max(...L.map(s=>ctx.measureText(s).width));
+        if ((xf.shrink || cl.kind==='n') && !xf.wrap && tw>w-pad*2 && tw>0){ const k=Math.max(xf.shrink?0.3:0.75, (w-pad*2)/tw); if (k<1){ fs*=k; ctx.font=xFontCss({...f, sz:fs}); tw*=k; } }
+        // はみ出して表示（左右が空いているとき）
+        let cx0=x, cx1=x+w;
+        if (!xf.wrap && !m && tw>w-pad*2 && cl.kind!=='n'){
+          if (ha==='left'||ha==='center'){ let k=c+1; while (cx1-x<tw+pad*2 && k<=rg.c1+12 && empty(r,k)){ cx1=X(k+1); k++; } }
+          if (ha==='right'||ha==='center'){ let k=c-1; while (cx1-cx0<tw+pad*2 && k>=0 && empty(r,k)){ cx0=X(k); k--; } }
+          if (ha==='center'){ const need=tw+pad*2; if (cx1-cx0>need){ const mid=x+w/2; cx0=Math.max(cx0, mid-need/2); cx1=Math.min(cx1, mid+need/2); } }
+        }
+        const lh=fs*1.22, blockH=L.length*lh;
+        let ty= xf.va==='top' ? y+1 : (xf.va==='center'||xf.va==='distributed'||xf.va==='justify') ? y+(h-blockH)/2 : y+h-blockH-1;
+        ctx.save(); ctx.beginPath(); ctx.rect(cx0,y,cx1-cx0,h); ctx.clip(); ctx.textBaseline='alphabetic';
+        for (const s of L){
+          const base=ty+lh*0.80;
+          if (ha==='distributed' && [...s].length>1){ const ch=[...s], ws=ch.map(q=>ctx.measureText(q).width), sum=ws.reduce((a,b)=>a+b,0), gap=Math.max(0,(w-pad*2-sum)/(ch.length-1));
+            let xx=x+pad; ctx.textAlign='left'; ch.forEach((q,i)=>{ ctx.fillText(q,xx,base); xx+=ws[i]+gap; }); }
+          else { ctx.textAlign=ha==='right'?'right':ha==='center'||ha==='distributed'?'center':'left';
+            const tx= ha==='right' ? (m?x+w:cx1)-pad : (ha==='center'||ha==='distributed') ? (cx0+cx1)/2 : cx0+pad;
+            ctx.fillText(s, tx, base);
+            if (f.u || f.s){ const ww=ctx.measureText(s).width, lx= ctx.textAlign==='right'?tx-ww:ctx.textAlign==='center'?tx-ww/2:tx; ctx.strokeStyle=ctx.fillStyle; ctx.lineWidth=fs*0.06;
+              ctx.beginPath(); if (f.u){ ctx.moveTo(lx,base+fs*0.12); ctx.lineTo(lx+ww,base+fs*0.12); } if (f.s){ ctx.moveTo(lx,base-fs*0.3); ctx.lineTo(lx+ww,base-fs*0.3); } ctx.stroke(); } }
+          ty+=lh; }
+        ctx.restore();
+      }
+      // 罫線
+      const edge=(b,x1,y1,x2,y2,horiz)=>{ ctx.strokeStyle=b.color; ctx.setLineDash(b.dash?b.dash.map(v=>v/sc*0+v):[]);
+        if (b.dbl){ const o=0.9; ctx.lineWidth=0.5; ctx.beginPath(); if (horiz){ ctx.moveTo(x1,y1-o); ctx.lineTo(x2,y2-o); ctx.moveTo(x1,y1+o); ctx.lineTo(x2,y2+o); } else { ctx.moveTo(x1-o,y1); ctx.lineTo(x2-o,y2); ctx.moveTo(x1+o,y1); ctx.lineTo(x2+o,y2); } ctx.stroke(); }
+        else { ctx.lineWidth=b.w; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); } };
+      ctx.lineCap='butt';
+      for (let r=rA;r<=Math.min(rb+1, rg.r1+1);r++) for (let c=cA;c<=Math.min(cb+1, rg.c1+1);c++){
+        const cl=cellAt(r,c); if (!cl) continue; const B=cl.xf.border; if (!B || (!B.l&&!B.r&&!B.t&&!B.b)) continue;
+        const m=mOf.get(key(r,c)), x=X(c), y=Y(r), x2=X(c+1), y2=Y(r+1);
+        if (B.t && (!m || r===m.r0)) edge(B.t,x,y,x2,y,true);
+        if (B.b && (!m || r===m.r1)) edge(B.b,x,y2,x2,y2,true);
+        if (B.l && (!m || c===m.c0)) edge(B.l,x,y,x,y2,false);
+        if (B.r && (!m || c===m.c1)) edge(B.r,x2,y,x2,y2,false);
+      }
+      ctx.setLineDash([]);
+      // 図・画像
+      for (const o of objs){
+        let x,y,w,h;
+        if (o.abs){ x=o.abs.x; y=o.abs.y; w=o.ext?o.ext.w:0; h=o.ext?o.ext.h:0; }
+        else { x=X(o.from.c)+o.from.co; y=Y(o.from.r)+o.from.ro;
+          if (o.to){ w=X(o.to.c)+o.to.co-x; h=Y(o.to.r)+o.to.ro-y; } else if (o.ext){ w=o.ext.w; h=o.ext.h; } else continue; }
+        if (w<=0||h<=0) continue;
+        if (o.img){ ctx.drawImage(o.img, x, y, w, h); continue; }
+        const pth=new Path2D();
+        if (o.shape==='ellipse') pth.ellipse(x+w/2,y+h/2,w/2,h/2,0,0,Math.PI*2);
+        else if (o.shape==='roundRect'){ const rr=Math.min(w,h)*0.17; pth.roundRect ? pth.roundRect(x,y,w,h,rr) : pth.rect(x,y,w,h); }
+        else if (o.shape==='line'||o.shape==='straightConnector1'){ pth.moveTo(x,y); pth.lineTo(x+w,y+h); }
+        else pth.rect(x,y,w,h);
+        if (o.fill && o.shape!=='line' && o.shape!=='straightConnector1'){ ctx.fillStyle=o.fill; ctx.fill(pth); }
+        if (o.line){ ctx.strokeStyle=o.line; ctx.lineWidth=o.lw; ctx.stroke(pth); }
+        if (o.paras && o.paras.some(Boolean)){ ctx.fillStyle=o.tc||'#000'; ctx.font=`${o.sz}px ${W_SANS}`; ctx.textBaseline='middle';
+          ctx.textAlign= o.algn==='ctr' ? 'center' : o.algn==='r' ? 'right' : 'left';
+          const lh=o.sz*1.25, tot=o.paras.length*lh; let ty= o.anc==='ctr' ? y+h/2-tot/2+lh/2 : o.anc==='b' ? y+h-tot+lh/2-4 : y+4+lh/2;
+          const tx= o.algn==='ctr' ? x+w/2 : o.algn==='r' ? x+w-5 : x+5;
+          ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip(); for (const t of o.paras){ ctx.fillText(t, tx, ty); ty+=lh; } ctx.restore(); }
+      }
+      ctx.restore();
+      pages.push({ canvas:cv, wPt:PW, hPt:PH });
+      await nextFrame();
+    }
+  }
+  if (!pages.length) throw new Error('表示できるシートがありませんでした');
+  return pages;
+}
+/* CSV：文字コードを判定して、表として描く */
+async function renderCsv(bytes, prog){
+  let text; try { text=new TextDecoder('utf-8',{fatal:true}).decode(bytes); } catch(e){ try { text=new TextDecoder('shift_jis').decode(bytes); } catch(_){ text=new TextDecoder().decode(bytes); } }
+  text=text.replace(/^﻿/,'');
+  const rows=[]; let row=[], cur='', q=false;
+  for (let i=0;i<text.length;i++){ const ch=text[i];
+    if (q){ if (ch==='"'){ if (text[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=ch; }
+    else if (ch==='"') q=true; else if (ch===','){ row.push(cur); cur=''; } else if (ch==='\n'||ch==='\r'){ if (ch==='\r'&&text[i+1]==='\n') i++; row.push(cur); rows.push(row); row=[]; cur=''; } else cur+=ch; }
+  if (cur || row.length){ row.push(cur); rows.push(row); }
+  if (!rows.length) throw new Error('データがありませんでした');
+  // 小さなブックを組み立てて、Excelと同じ描き方を使う
+  await loadScript(LIBS.jszip);
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const nC=Math.min(120, Math.max(...rows.map(r=>r.length)));
+  const widths=[...Array(nC)].map((_,c)=>Math.min(50, Math.max(6, ...rows.slice(0,500).map(r=>{ const s=r[c]||''; let n=0; for (const ch of s) n+= ch.charCodeAt(0)>255?2:1; return n+1; }))));
+  const colName=c=>{ let s=''; c++; while (c){ const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26); } return s; };
+  let sd=''; rows.slice(0,3000).forEach((r,ri)=>{ sd+=`<row r="${ri+1}">`; r.slice(0,nC).forEach((v,ci)=>{ if (v==='') return; const ref=colName(ci)+(ri+1);
+    sd+= /^-?\d+(\.\d+)?$/.test(v.trim()) && v.trim().length<16 ? `<c r="${ref}" s="1"><v>${v.trim()}</v></c>` : `<c r="${ref}" t="inlineStr" s="${ri===0?2:1}"><is><t>${esc(v)}</t></is></c>`; }); sd+='</row>'; });
+  const z=new JSZip();
+  z.file('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="CSV" sheetId="1" r:id="rId1"/></sheets></workbook>');
+  z.file('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+  z.file('xl/styles.xml','<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts><font><sz val="10"/><name val="Yu Gothic"/></font><font><b/><sz val="10"/><name val="Yu Gothic"/></font></fonts><fills><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF1F5"/></patternFill></fill></fills><borders><border/><border><left style="thin"><color rgb="FFB8BEC8"/></left><right style="thin"><color rgb="FFB8BEC8"/></right><top style="thin"><color rgb="FFB8BEC8"/></top><bottom style="thin"><color rgb="FFB8BEC8"/></bottom></border></borders><cellXfs><xf/><xf borderId="1"/><xf fontId="1" fillId="2" borderId="1"/></cellXfs></styleSheet>');
+  z.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetFormatPr defaultRowHeight="16"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}"/>`).join('')}</cols><sheetData>${sd}</sheetData><pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="${widths.reduce((a,b)=>a+b,0)*8>760?'landscape':'portrait'}" fitToWidth="1" fitToHeight="0"/></worksheet>`);
+  return renderXlsx(await z.generateAsync({ type:'uint8array' }), prog);
+}
+
+/* 古い形式（.xls）だけは外部の部品で読む */
+async function renderXlsLegacy(buf, prog){
   await loadScript(LIBS.xlsx);
   prog('ブックを読み込み中');
   const wb=XLSX.read(buf, { type:'array', cellStyles:true, cellDates:true });
@@ -2784,7 +3216,7 @@ async function importOffice(file){
   const buf=await file.arrayBuffer();
   let pages, fmt='png';
   if (kind==='Word') pages=await renderDocx(buf, say);
-  else if (kind==='Excel') pages=await renderXlsx(ext==='csv' ? new Uint8Array(buf) : buf, say);
+  else if (kind==='Excel') pages= ext==='csv' ? await renderCsv(new Uint8Array(buf), say) : ext==='xls' ? await renderXlsLegacy(buf, say) : await renderXlsx(buf, say);
   else { pages=await renderPptx(buf, say); fmt='jpg'; }
   const bytes=await pagesToPdf(pages, fmt, (i,n)=>say(`PDFを作成 ${i} / ${n}`));
   await openDoc(bytes, file.name);
