@@ -213,7 +213,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <button class="tb" id="redo" aria-label="やり直す" title="やり直す（3本指タップ）">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
     <span class="tbsep"></span>
-    <button class="tb" id="pencil" aria-pressed="false" aria-label="Pencilのみで書く" title="オンにすると指では書かず、スクロール・ズーム専用になります（手のひら誤タッチ防止）">
+    <button class="tb" id="pencil" aria-pressed="false" aria-label="Pencilのみで書く" title="オンにすると指では書かず、スクロール・ズーム専用になります">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V6.5a1.5 1.5 0 0 1 3 0V12"/><path d="M11 11.5V4.5a1.5 1.5 0 0 1 3 0V12"/><path d="M14 11.5V6.5a1.5 1.5 0 0 1 3 0V14c0 4.2-2.3 7-6.2 7-2.8 0-4.2-1.3-5.8-4l-1.6-2.8a1.5 1.5 0 0 1 2.5-1.6L8 14"/></svg></button>
   </div>
 
@@ -591,13 +591,12 @@ function redo(){ const a=redoStack.pop(); if(!a) return; clearSel(); applyA(a,1)
 function setStrokes(p, next){ const before=p.strokes.slice(); p.strokes=next; pushAction({t:'set', p, before, after:next.slice()}); }
 
 /* ---------- drawing input ---------- */
-let cur=null, tp=null, lastInk=null, penUntil=0;
+let cur=null, tp=null, lastInk=null;
 function pressureOf(e){ return e.pointerType==='pen' ? (e.pressure>0 ? e.pressure : 0.35) : 0.5; }
 function localPt(e){ return [(e.clientX-cur.rect.left)/cur.k, (e.clientY-cur.rect.top)/cur.k]; }
 
 pagesEl.addEventListener('pointerdown', e => {
   if (e.pointerType==='mouse' && e.button!==0) return;
-  if (e.pointerType==='pen') penUntil=performance.now()+400;
   if (e.pointerType==='pen' && !st.pencilSeen){
     st.pencilSeen=true;
     if (!st.pencilOnly){ st.pencilOnly=true; syncUI(); toast('Apple Pencilを検出しました。指はスクロールとズームに使えます'); }
@@ -645,7 +644,6 @@ pagesEl.addEventListener('pointerdown', e => {
   }
 });
 window.addEventListener('pointermove', e => {
-  if (e.pointerType==='pen' && (cur || e.buttons)) penUntil=performance.now()+400;   // ペン先を浮かせているだけ（ホバー）は数えない
   if (!cur || e.pointerId!==cur.id) return;
   let evs=[]; try { evs = e.getCoalescedEvents ? e.getCoalescedEvents() : []; } catch(_){}
   if (!evs.length) evs=[e];
@@ -656,7 +654,7 @@ window.addEventListener('pointermove', e => {
   }
   drawCur();
 });
-window.addEventListener('pointerup', e => { if (e.pointerType==='pen') penUntil=performance.now()+300; if (cur && e.pointerId===cur.id) finish(false); });
+window.addEventListener('pointerup', e => { if (cur && e.pointerId===cur.id) finish(false); });
 window.addEventListener('pointercancel', e => { if (cur && e.pointerId===cur.id){ cur.cancelled=true; finish(e.pointerType==='touch'); } });
 
 function armHold(){ clearTimeout(cur.holdT); const c=cur; cur.holdT=setTimeout(()=>straighten(c), 750); }
@@ -784,9 +782,7 @@ function cancelTouchStroke(){
 
 /* ---------- touch: palm rejection, one-finger scroll, pinch, multi-finger taps ---------- */
 let tap=null;
-const PALM_R=60;                       // 親指を寝かせた接触より明らかに大きいものだけを手のひらとみなす（CSS px）
-const isPalm=t=>Math.max(t.radiusX||0, t.radiusY||0)>PALM_R;
-const fingers = list => [...list].filter(t => t.touchType!=='stylus' && !isPalm(t));
+const fingers = list => [...list].filter(t => t.touchType!=='stylus');   // Pencilの接触は指として数えない
 function pinching(){ return !!(tp && tp.armed); }
 
 // 1本指のスクロール（慣性つき）。ブラウザ標準のスクロールを使わないので、2本指の拡大と取り合いにならない
@@ -823,13 +819,6 @@ function endPan(fling){
   };
   inertia=requestAnimationFrame(step);
 }
-function revertPan(){             // 手のひらが先に触れて少し動いた分は、ペンが触れた時点で元に戻す
-  if (!pan) return;
-  if (panRaf){ cancelAnimationFrame(panRaf); panRaf=0; }
-  if (performance.now()-pan.t0<400){ scroller.scrollLeft=pan.sl; scroller.scrollTop=pan.st; }
-  pan=null;
-}
-
 function anchorAt(cx,cy){       // 指の間にあるページ上の位置（拡大後もこの位置を指の間に保つ）
   const X=cx+scroller.scrollLeft, Y=cy+scroller.scrollTop; let best=null, bd=Infinity;
   for (const p of D.pages){ const el=p.el; if (!el) continue; const t=el.offsetTop, h=el.offsetHeight;
@@ -886,14 +875,8 @@ scroller.addEventListener('touchstart', e => {
   const now=performance.now();
   if (e.cancelable) e.preventDefault();      // スクロールも拡大もアプリ側で処理する（ブラウザ標準の動きと取り合わない）
   stopInertia();
-  const stylus=[...e.touches].some(t=>t.touchType==='stylus');
-  const palm=[...e.changedTouches].some(t=>t.touchType!=='stylus' && isPalm(t));
   if (!tap) tap={ t0:now, max:0, moved:false, bad:false, minSep:1e9, pos:new Map() };
-  if (stylus){                 // ペンが触れたら、直前に手のひらで始まった拡大や移動は取り消す
-    tap.bad=true; if (tp) endPinch(now-tp.t0>400); revertPan(); return;
-  }
-  if (palm){ tap.bad=true; return; }
-  if (now<penUntil) tap.bad=true;   // 書いた直後の接触では、2本指タップの取り消しをしない（拡大・スクロールはできる）
+  if ([...e.changedTouches].every(t=>t.touchType==='stylus')){ tap.bad=true; return; }   // Pencilが触れただけなら何もしない
   for (const t of e.changedTouches) tap.pos.set(t.identifier,[t.clientX,t.clientY]);
   const fs=fingers(e.touches);
   tap.max=Math.max(tap.max, fs.length);
@@ -913,7 +896,7 @@ function touchEnd(e){
   if (pan && ![...e.touches].some(t=>t.identifier===pan.id)) endPan(e.type==='touchend');
   if (e.touches.length===0 && tap){
     const dt=performance.now()-tap.t0;
-    if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36 && performance.now()>=penUntil){
+    if (!tap.bad && !tap.moved && dt<380 && tap.minSep>=36){
       if (tap.max===2){ undo(); toast('取り消しました',1200); } else if (tap.max===3){ redo(); toast('やり直しました',1200); } }
     tap=null;
   }
