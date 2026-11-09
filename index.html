@@ -70,6 +70,11 @@ button,label.btn{font:inherit;color:inherit}
 .dlgbox{background:var(--bar);color:var(--ink);border-radius:16px;box-shadow:var(--shadow);padding:20px 20px 16px;max-width:420px;display:flex;flex-direction:column;gap:8px;line-height:1.65}
 .dlgbox b{font-size:15px;text-wrap:balance}
 .dlgbox p{margin:0;font-size:13px;color:var(--muted)}
+.newopts{display:flex;gap:12px;justify-content:center;margin:6px 0 4px}
+.newopt{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 14px;border-radius:14px;border:1.5px solid var(--line,rgba(127,127,127,.35));background:transparent;color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.newopt:hover,.newopt:focus-visible{border-color:var(--accent);outline:none}
+.newopt .pv{width:92px;height:116px;border-radius:4px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.12)}
+.newopt .pv.grid{background-image:linear-gradient(#dbe2ec 1px,transparent 1px),linear-gradient(90deg,#dbe2ec 1px,transparent 1px);background-size:11px 11px}
 .bubdlg{place-items:start center;padding-top:max(12px,env(safe-area-inset-top))}
 .bubdlg .dlgbox{width:min(520px,100%);max-width:none}
 #bubtext{width:100%;box-sizing:border-box;min-height:104px;resize:vertical;font:inherit;font-size:17px;line-height:1.5;padding:10px 12px;border-radius:10px;border:1px solid var(--line,rgba(127,127,127,.4));background:var(--bg,#fff);color:var(--ink)}
@@ -237,13 +242,13 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/></svg><span>開く</span>
     </label>
     <input id="file" class="vh" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.presentationml.presentation">
-    <button class="btn" id="newnote" title="方眼ノートを新規作成">新規</button>
+    <button class="btn" id="newnote" title="新しいノートを作成（方眼あり／なし）">新規</button>
   </div>
   <span class="docname" id="docname">読み込み中…</span>
   <div class="grp">
     <button class="btn" id="scanbtn" aria-label="スキャン" title="カメラで撮影・写真から取り込み">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.3"/></svg><span>スキャン</span></button>
-    <button class="btn" id="addpage" aria-label="ページを追加" title="今のページの後ろに方眼ページを追加">
+    <button class="btn" id="addpage" aria-label="ページを追加" title="今のページの後ろに白紙（今のページと同じ用紙）を追加">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M8.5 13.5h7" stroke-linecap="round"/></svg><span>ページ追加</span></button>
     <button class="btn primary" id="export" title="書き込みを含めたPDFを保存">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6.5"/></svg><span>書き出し</span></button>
@@ -386,6 +391,17 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
   <div class="scbtm" id="sc-b-btw" hidden>
     <span class="scmsg" id="sc-btwmsg"></span>
     <label class="btn" for="sc-cam">カメラで撮影</label><label class="btn" for="sc-lib">写真から選ぶ</label>
+  </div>
+</div>
+<div class="dlg" id="newdlg" hidden role="dialog" aria-modal="true" aria-labelledby="newttl">
+  <div class="dlgbox">
+    <b id="newttl">新しいノート</b>
+    <p>用紙を選んでください。</p>
+    <div class="newopts">
+      <button class="newopt" id="newgrid"><span class="pv grid"></span>方眼あり</button>
+      <button class="newopt" id="newplain"><span class="pv"></span>方眼なし</button>
+    </div>
+    <div class="dlgbtns"><button class="btn" id="newcancel">キャンセル</button></div>
   </div>
 </div>
 <div class="dlg" id="closedlg" hidden role="dialog" aria-modal="true" aria-labelledby="closettl">
@@ -611,6 +627,7 @@ async function requestRender(){
 }
 function drawPaper(ctx, p, scale){
   ctx.fillStyle='#fff'; ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  if (p.grid===false) return;
   const step=14.1732; // 5mm
   ctx.save(); ctx.setTransform(scale,0,0,scale,0,0);
   ctx.strokeStyle='#dbe2ec'; ctx.lineWidth=Math.max(0.4, 1/scale); ctx.beginPath();
@@ -1639,17 +1656,17 @@ window.addEventListener('keydown', e=>{
   const map={p:'pen',h:'hl',e:'eraser',l:'lasso',s:'shape',v:'select'}; const t=map[e.key.toLowerCase()];
   if (t) setTool(t);
   if ((e.key==='Delete'||e.key==='Backspace') && sel) $('#seldel').click();
-  if (e.key==='Escape'){ if (!$('#bubdlg').hidden) bubClose(false); if (!$('#guide').hidden) closeGuide(); clearSel(); closePop(); if (!$('#closedlg').hidden) hideClose(); }
+  if (e.key==='Escape'){ if (!$('#newdlg').hidden) $('#newdlg').hidden=true; if (!$('#bubdlg').hidden) bubClose(false); if (!$('#guide').hidden) closeGuide(); clearSel(); closePop(); if (!$('#closedlg').hidden) hideClose(); }
 });
 
 /* ---------- pages ---------- */
-function blankPage(w=595.28, h=841.89){ return { id:uid(), kind:'blank', w, h, strokes:[] }; }
+function blankPage(w=595.28, h=841.89, grid=true){ return { id:uid(), kind:'blank', w, h, grid, strokes:[] }; }
 $('#addpage').onclick=()=>{
-  const ref=D.pages[curIndex]; const np=blankPage(ref?ref.w:595.28, ref?ref.h:841.89);
+  const ref=D.pages[curIndex]; const np=blankPage(ref?ref.w:595.28, ref?ref.h:841.89, !(ref && ref.kind==='blank' && ref.grid===false));
   const before=D.pages.slice(); const after=before.slice(); after.splice(curIndex+1,0,np);
   D.pages=after; pushAction({t:'pages', before, after:after.slice()}); mountPages();
   requestAnimationFrame(()=>{ scroller.scrollTo({ top: np.el.offsetTop-16, behavior:'smooth' }); });
-  toast(`${curIndex+2}ページ目に方眼ページを追加しました`);
+  toast(`${curIndex+2}ページ目に${np.grid?'方眼':'白紙'}ページを追加しました`);
 };
 
 /* ---------- documents & tabs ---------- */
@@ -1664,12 +1681,12 @@ async function buildDoc(doc, bytes, metaPages){
   }
   if (doc.pages){ for (const p of doc.pages) if (p.kind==='pdf') p.vp=vps[p.src]||p.vp; }
   else if (metaPages){
-    doc.pages = metaPages.map(m=>({ id:m.id, kind:m.kind, src:m.src, w:m.w, h:m.h, vp:m.kind==='pdf'?vps[m.src]:null,
+    doc.pages = metaPages.map(m=>({ id:m.id, kind:m.kind, src:m.src, w:m.w, h:m.h, grid:m.grid!==false, vp:m.kind==='pdf'?vps[m.src]:null,
       strokes:(m.strokes||[]).map(s=>Object.assign({}, s, { done:true })) }))
       .filter(p=>p.kind!=='pdf' || p.vp);
   } else if (bytes){
     doc.pages = vps.slice(1).map((vp,i)=>({ id:uid(), kind:'pdf', src:i+1, w:vp.width, h:vp.height, vp, strokes:[] }));
-  } else doc.pages=[blankPage(), blankPage(), blankPage()];
+  } else doc.pages=[blankPage(undefined,undefined,newGrid), blankPage(undefined,undefined,newGrid), blankPage(undefined,undefined,newGrid)];
 }
 async function loadInto(doc){          // 保存してある書き込みと元ファイルを読み込む
   let metaPages=null;
@@ -1811,10 +1828,18 @@ $('#file').addEventListener('change', async e=>{
     toast(`${D.pages.length}ページを新しいタブで開きました`);
   } catch(err){ console.error(err); toast('このファイルは開けませんでした。パスワード付きか、ファイルが壊れている可能性があります', 5000); }
 });
-$('#newnote').onclick=async()=>{
-  try { await openDoc(null, nextNoteName()); toast('方眼ノートを新しいタブで作成しました'); }
+let newGrid=true;
+async function makeNote(grid){
+  $('#newdlg').hidden=true; newGrid=grid;
+  try { await openDoc(null, nextNoteName()); toast(`${grid?'方眼':'白紙（方眼なし）'}のノートを新しいタブで作成しました`); }
   catch(err){ toast(err.message, 3000); }
-};
+  finally { newGrid=true; }
+}
+$('#newnote').onclick=()=>{ $('#newdlg').hidden=false; setTimeout(()=>{ try{ $('#newgrid').focus(); }catch(e){} },30); };
+$('#newgrid').onclick=()=>makeNote(true);
+$('#newplain').onclick=()=>makeNote(false);
+$('#newcancel').onclick=()=>{ $('#newdlg').hidden=true; };
+$('#newdlg').addEventListener('pointerdown', e=>{ if (e.target===$('#newdlg')) $('#newdlg').hidden=true; });
 
 /* ---------- persistence (this browser only) ---------- */
 let dbP=null;
@@ -1830,7 +1855,7 @@ function serStroke(s){ const o={ id:s.id, tool:s.tool, color:s.color, w:s.w, pts
 function metaOf(doc){
   const act = doc===D;
   return { name:doc.name, hasBytes:doc.hasBytes, dirty:doc.dirty!==false, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
-    pages:(doc.pages||[]).map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h,
+    pages:(doc.pages||[]).map(p=>({ id:p.id, kind:p.kind, src:p.src, w:p.w, h:p.h, grid:p.grid!==false,
       strokes:p.strokes.map(serStroke) })) };
 }
 // 保存に失敗したら一度だけ知らせる（空き容量不足など。気づかないまま書き込みを失わないように）
@@ -1894,8 +1919,9 @@ async function exportPdf(){
       if (p.kind==='pdf') page=out.addPage(copied[ci++]);
       else {
         page=out.addPage([p.w,p.h]); const step=14.1732, col=rgb(.86,.89,.93);
+        if (p.grid!==false){
         for (let x=step;x<p.w;x+=step) page.drawLine({start:{x,y:0},end:{x,y:p.h},thickness:.35,color:col});
-        for (let y=step;y<p.h;y+=step) page.drawLine({start:{x:0,y:p.h-y},end:{x:p.w,y:p.h-y},thickness:.35,color:col});
+        for (let y=step;y<p.h;y+=step) page.drawLine({start:{x:0,y:p.h-y},end:{x:p.w,y:p.h-y},thickness:.35,color:col}); }
       }
       try { if (PDFLib.setLineJoin && PDFLib.LineJoinStyle) page.pushOperators(PDFLib.setLineJoin(PDFLib.LineJoinStyle.Round)); } catch(_){}
       for (const s of p.strokes){
@@ -3827,7 +3853,7 @@ function buildGuide(){
    card(guideIcon('#grip')||ico('<circle cx="8" cy="6" r="1.4"/><circle cx="16" cy="6" r="1.4"/><circle cx="8" cy="12" r="1.4"/><circle cx="16" cy="12" r="1.4"/>'),'ツールバーの移動','左端の「⋮⋮」をドラッグすると、ツールバーを上・左・右に動かせます。タップでも順に切り替わります。')+
    `</div><h3>ファイルとタブ</h3><div class="ggrid">`+
    card(ico('<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/>'),'開く','PDF・Word・Excel・PowerPointを開けます（Office系はPDFに変換して表示）。開いたファイルはタブに並び、タップで切り替え、✕で閉じます。「＋」でも新しいファイルを開けます。')+
-   card(ico('<path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M8.5 13.5h7"/>'),'新規・ページ追加','「新規」で方眼ノートを作り、「ページ追加」で今のページの後ろに方眼ページを足します。')+
+   card(ico('<path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M8.5 13.5h7"/>'),'新規・ページ追加','「新規」で方眼ありまたは方眼なしのノートを作り、「ページ追加」で今のページの後ろに同じ用紙のページを足します。')+
    card(ico('<path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.3"/>'),'スキャン','紙を撮影して台形補正・影とり（カラー／くっきり／グレー／白黒）をかけ、複数枚を1つのPDFにして新しいタブで開きます。')+
    card(ico('<path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-6.5"/>'),'書き出し','書き込みを含めたPDFとして保存・共有します。書き込みはこの端末に自動保存されるので、閉じても続きから再開できます。')+
    `</div>`;
