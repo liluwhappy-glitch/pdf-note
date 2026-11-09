@@ -315,6 +315,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 
 <div id="selbar" hidden>
   <button class="btn" id="seltext" hidden>コメント</button>
+  <button class="btn" id="selrot" hidden>90°回転</button>
   <button class="btn" id="selopa" hidden>透過</button>
   <button class="btn" id="selstyle" hidden>図形の色</button>
   <button class="btn" id="selback" hidden>背面へ</button>
@@ -465,7 +466,8 @@ function toast(msg, ms=2600){ const t=$('#toast'); t.textContent=msg; t.classLis
 /* ---------- geometry ---------- */
 function cssK(){ return st.fit*st.zoom; }
 function res(cw, ch){ let r = Math.min(window.devicePixelRatio||1, 3); const MAX=6e6; if (cw*ch*r*r > MAX) r = Math.sqrt(MAX/(cw*ch)); return r; }
-function bbOf(s){ if (s.bb) return s.bb; const p=s.pts; let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+function bbOf(s){ if (s.bb) return s.bb; let p=s.pts; let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+  if (s.rot && s.tool==='shape'){ p=[]; for (const pl of flattenGeom(shapeGeom(s))) for (const v of pl) p.push(v[0],v[1],0); }
   for (let i=0;i<p.length;i+=3){ if(p[i]<a)a=p[i]; if(p[i]>c)c=p[i]; if(p[i+1]<b)b=p[i+1]; if(p[i+1]>d)d=p[i+1]; }
   return (s.bb=[a,b,c,d]); }
 function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax, dy=by-ay, l=dx*dx+dy*dy; let t = l ? ((px-ax)*dx+(py-ay)*dy)/l : 0; t=clamp(t,0,1); return Math.hypot(px-ax-t*dx, py-ay-t*dy); }
@@ -695,12 +697,12 @@ function drawTip(c, list){     // 先端（確定部分の終点〜ペン先）�
 }
 
 /* ---------- 図形・画像（ペンの線と同じ配列に入れるので、選択・移動・複製・取り消し・保存が共通で使える） ---------- */
-const SH_KINDS=[['rect','四角'],['rrect','角丸'],['ellipse','円・楕円'],['tri','三角'],['diamond','ひし形'],['cloud','雲'],['bubble','吹き出し'],['line','直線'],['arrow','矢印']];
+const SH_KINDS=[['rect','四角'],['rrect','角丸'],['ellipse','円・楕円'],['tri','三角'],['diamond','ひし形'],['cloud','雲'],['bubble','吹き出し'],['free','自由図形'],['line','直線'],['arrow','矢印']];
 const SH_ICON={ rect:'<rect x="4" y="6" width="16" height="12"/>', rrect:'<rect x="4" y="6" width="16" height="12" rx="4"/>', ellipse:'<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   tri:'<path d="M12 5l8 14H4z"/>', diamond:'<path d="M12 4l8 8-8 8-8-8z"/>', cloud:'<path d="M7 17a3.5 3.5 0 0 1-.6-6.9 5 5 0 0 1 9.5-1A4 4 0 0 1 17 17z"/>',
-  bubble:'<path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/>', line:'<path d="M5 19L19 5"/>', arrow:'<path d="M5 19L19 5M10 5h9v9"/>' };
+  free:'<path d="M4 17l3-10 6 3 3-6 4 9-5 6z"/>', bubble:'<path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/>', line:'<path d="M5 19L19 5"/>', arrow:'<path d="M5 19L19 5M10 5h9v9"/>' };
 const SH_COLORS=PEN_COLORS;
-const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud','bubble']);
+const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud','bubble','free']);
 const SH_W=[0.5, 14];
 st.shape={ kind:'rect', color:'#d6322b', fill:null, fa:1, w:1.8, square:false };
 try { const o=JSON.parse(localStorage.getItem('akanib-shape')||'null'); if (o) Object.assign(st.shape, o); } catch(e){}
@@ -708,7 +710,16 @@ try { const c=localStorage.getItem('akanib-hlcap'); if (c==='round'||c==='butt')
 try { const m=localStorage.getItem('akanib-erase'); if (m==='part'||m==='stroke') st.eraseMode=m; } catch(e){}
 const saveShapeSt=()=>{ try{ localStorage.setItem('akanib-shape', JSON.stringify(st.shape)); }catch(e){} };
 const KAP=0.5522847498;
+const ROT_KINDS=new Set(['rect','rrect','ellipse','tri','diamond','cloud']);
+function rotPt(x,y,cx,cy,a){ const c=Math.cos(a), sn=Math.sin(a), dx=x-cx, dy=y-cy; return [cx+dx*c-dy*sn, cy+dx*sn+dy*c]; }
 function shapeGeom(s){
+  if (s.kind==='free'){ const q=s.pts, c=[]; for (let i=0;i<q.length;i+=3) c.push([i?'L':'M',q[i],q[i+1]]); c.push(['Z']); return c; }
+  const c=shapeGeom0(s);
+  if (s.rot && ROT_KINDS.has(s.kind)){ const q=s.pts, cx=(q[0]+q[3])/2, cy=(q[1]+q[4])/2;
+    for (const k of c) for (let i=1;i+1<k.length;i+=2){ const r=rotPt(k[i],k[i+1],cx,cy,s.rot); k[i]=r[0]; k[i+1]=r[1]; } }
+  return c;
+}
+function shapeGeom0(s){
   const q=s.pts, x0=q[0], y0=q[1], x1=q[3], y1=q[4], c=[], w=x1-x0, h=y1-y0, cx=(x0+x1)/2, cy=(y0+y1)/2;
   switch (s.kind){
     case 'line': c.push(['M',x0,y0],['L',x1,y1]); break;
@@ -801,7 +812,7 @@ function flattenGeom(cmds){
 }
 // 図形・画像に当たっているか。interior=true なら塗りの内側や画像の中も当たりとする
 function shapeHit(s, x, y, r, interior){
-  const q=s.pts, bb=s.kind==='bubble' ? bbOf(s) : null, bx0=bb?bb[0]:Math.min(q[0],q[3]), bx1=bb?bb[2]:Math.max(q[0],q[3]), by0=bb?bb[1]:Math.min(q[1],q[4]), by1=bb?bb[3]:Math.max(q[1],q[4]);
+  const q=s.pts, bb=(s.kind==='bubble'||s.kind==='free'||s.rot) ? bbOf(s) : null, bx0=bb?bb[0]:Math.min(q[0],q[3]), bx1=bb?bb[2]:Math.max(q[0],q[3]), by0=bb?bb[1]:Math.min(q[1],q[4]), by1=bb?bb[3]:Math.max(q[1],q[4]);
   if (s.tool==='img') return interior && x>=bx0&&x<=bx1&&y>=by0&&y<=by1;
   const m=r+s.w+30; if (x<bx0-m||x>bx1+m||y<by0-m||y>by1+m) return false;
   const polys=flattenGeom(shapeGeom(s)), tol=r+(s.color?s.w/2:0);
@@ -816,12 +827,33 @@ function topHit(p, x, y, r){
   return null;
 }
 function handlePts(s){
-  const q=s.pts; if (s.kind==='line' || s.kind==='arrow') return [[q[0],q[1]],[q[3],q[4]]];
-  const H=[[q[0],q[1]],[q[3],q[1]],[q[3],q[4]],[q[0],q[4]]]; if (s.kind==='bubble' && q.length>=9) H.push([q[6],q[7]]); return H;
+  const q=s.pts, off=34/cssK(); if (s.kind==='line' || s.kind==='arrow') return [[q[0],q[1]],[q[3],q[4]]];
+  if (s.kind==='free'){ const H=[]; for (let i=0;i<q.length;i+=3) H.push([q[i],q[i+1]]);
+    const bb=bbOf(s), cx=(bb[0]+bb[2])/2; H.push([cx,bb[1]-off,'rot',cx,bb[1]]); return H; }
+  const a=s.rot||0, cx=(q[0]+q[3])/2, cy=(q[1]+q[4])/2, R=(x,y)=> a ? rotPt(x,y,cx,cy,a) : [x,y];
+  const H=[R(q[0],q[1]),R(q[3],q[1]),R(q[3],q[4]),R(q[0],q[4])];
+  if (s.kind==='bubble' && q.length>=9) H.push([q[6],q[7]]);
+  else if (ROT_KINDS.has(s.kind)){ const t=R(cx,Math.min(q[1],q[4])-off), b=R(cx,Math.min(q[1],q[4])); H.push([t[0],t[1],'rot',b[0],b[1]]); }
+  return H;
 }
 function withPts(s, pts){ const o=Object.assign({}, s, { pts, done:true }); delete o.bb; delete o.paths; return o; }
+function snapAng(a){ const st15=Math.PI/12, sn=Math.round(a/st15)*st15; return Math.abs(a-sn)<0.07 ? sn : a; }
+function rotateFree(s, a){ const bb=bbOf(s), cx=(bb[0]+bb[2])/2, cy=(bb[1]+bb[3])/2, pts=[];
+  for (let i=0;i<s.pts.length;i+=3){ const r=rotPt(s.pts[i],s.pts[i+1],cx,cy,a); pts.push(Math.round(r[0]*100)/100, Math.round(r[1]*100)/100, 0); }
+  return withPts(s,pts); }
 function resizeStroke(s, i, x, y){
   const q=s.pts;
+  if (s.kind==='free'){ const n=q.length/3;
+    if (i>=n){ const bb=bbOf(s); let a=Math.atan2(y-(bb[1]+bb[3])/2, x-(bb[0]+bb[2])/2)+Math.PI/2; return rotateFree(s, snapAng(a)); }
+    const pts=q.slice(); pts[i*3]=Math.round(x*100)/100; pts[i*3+1]=Math.round(y*100)/100; return withPts(s,pts); }
+  if (i===4 && ROT_KINDS.has(s.kind)){ const cx=(q[0]+q[3])/2, cy=(q[1]+q[4])/2; let a=Math.atan2(y-cy,x-cx)+Math.PI/2; a=snapAng(a); if (a>Math.PI) a-=2*Math.PI; if (a<-Math.PI) a+=2*Math.PI;
+    const o=withPts(s,q.slice()); o.rot=Math.round(a*1000)/1000; return o; }
+  if (s.rot && ROT_KINDS.has(s.kind)){          // 回転した図形の拡大縮小：図形の向きに沿って大きさを変え、反対側の角は動かさない
+    const cx=(q[0]+q[3])/2, cy=(q[1]+q[4])/2, a=s.rot, L=rotPt(x,y,cx,cy,-a);
+    const cs0=[[q[0],q[1]],[q[3],q[1]],[q[3],q[4]],[q[0],q[4]]], [ox,oy]=cs0[(i+2)%4], W=rotPt(ox,oy,cx,cy,a);
+    const r2=v=>Math.round(v*100)/100, nb=[Math.min(L[0],ox),Math.min(L[1],oy),Math.max(L[0],ox),Math.max(L[1],oy)];
+    const ncx=(nb[0]+nb[2])/2, ncy=(nb[1]+nb[3])/2, W2=rotPt(ox,oy,ncx,ncy,a), sx=W[0]-W2[0], sy=W[1]-W2[1];
+    return withPts(s,[r2(nb[0]+sx),r2(nb[1]+sy),0,r2(nb[2]+sx),r2(nb[3]+sy),0]); }
   if (s.kind==='line' || s.kind==='arrow'){ const pts=q.slice(); pts[i*3]=x; pts[i*3+1]=y; return withPts(s,pts); }
   if (s.kind==='bubble' && i===4){ const r3=v=>Math.round(v*100)/100; return withPts(s,[q[0],q[1],0,q[3],q[4],0,r3(x),r3(y),0]); }
   const cs=[[q[0],q[1]],[q[3],q[1]],[q[3],q[4]],[q[0],q[4]]], [ox,oy]=cs[(i+2)%4];
@@ -854,7 +886,10 @@ function shapeStyle(){ if (st.editSel){ const a=selShapes()[0]; if (a) return { 
 function setShapeStyle(patch){
   if (st.editSel){
     if (!sel) return; const p=sel.p, ids=sel.ids;
-    setStrokes(p, p.strokes.map(s=> ids.has(s.id)&&s.tool==='shape' ? Object.assign(withPts(s,s.pts), patch) : s));
+    setStrokes(p, p.strokes.map(s=>{ if (!(ids.has(s.id)&&s.tool==='shape')) return s; let pt=patch;
+      if (pt.kind && (s.kind==='free' || pt.kind==='free')){ pt=Object.assign({},pt); delete pt.kind; }       // 自由図形は他の形に変えられない
+      if (pt.kind && !ROT_KINDS.has(pt.kind)) pt=Object.assign({},pt,{rot:0});
+      return Object.assign(withPts(s,s.pts), pt); }));
     sel.bb=selBB(p,ids); redrawInk(p); drawSel();
   } else { Object.assign(st.shape, patch); saveShapeSt(); syncUI(); }
 }
@@ -895,6 +930,21 @@ function buildShapePop(){
   }
 }
 
+function rdp(P, eps){          // 手書きの輪郭を、少ない頂点の多角形にする
+  const n=P.length/2; if (n<3) return P.slice(); const keep=new Uint8Array(n); keep[0]=keep[n-1]=1; const stack=[[0,n-1]];
+  while (stack.length){ const [a,b]=stack.pop(); let md=0, mi=-1;
+    for (let i=a+1;i<b;i++){ const d=segDist(P[i*2],P[i*2+1],P[a*2],P[a*2+1],P[b*2],P[b*2+1]); if (d>md){ md=d; mi=i; } }
+    if (md>eps && mi>0){ keep[mi]=1; stack.push([a,mi],[mi,b]); } }
+  const o=[]; for (let i=0;i<n;i++) if (keep[i]) o.push(P[i*2],P[i*2+1]); return o;
+}
+function makeFree(c){
+  const S=st.shape; let P=c.path.slice(), eps=4/c.k, V=rdp(P,eps);
+  while (V.length/2>40 && eps<200){ eps*=1.4; V=rdp(P,eps); }
+  if (V.length>=6 && Math.hypot(V[0]-V[V.length-2],V[1]-V[V.length-1])*c.k<10) V.length-=2;   // 終点が始点に近ければ閉じる
+  if (V.length<6) return null;
+  const pts=[]; for (let i=0;i<V.length;i+=2) pts.push(Math.round(V[i]*100)/100, Math.round(V[i+1]*100)/100, 0);
+  return { id:uid(), tool:'shape', kind:'free', color:S.color, fill:S.fill, fa:S.fa, w:S.w, pts, done:true };
+}
 /* ---------- selection ---------- */
 let sel=null;
 function selBB(p, ids){ let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
@@ -919,16 +969,21 @@ function selPick(p,x,y,k){     // 選択ツール：押した場所にある物�
   setSel(p, new Set([h.id])); return true;
 }
 function drawHandles(hs){ const px=1/cssK(); lctx.setLineDash([]);
-  for (const [x,y] of hs){ lctx.beginPath(); lctx.arc(x,y,7*px,0,Math.PI*2); lctx.fillStyle='#fff'; lctx.fill(); lctx.strokeStyle=SEL_COLOR; lctx.lineWidth=2.2*px; lctx.stroke(); } }
+  for (const [x,y,t,ax,ay] of hs){
+    if (t==='rot'){ lctx.beginPath(); lctx.moveTo(ax,ay); lctx.lineTo(x,y); lctx.strokeStyle=SEL_COLOR; lctx.lineWidth=1.5*px; lctx.stroke(); }
+    lctx.beginPath(); lctx.arc(x,y,(t==='rot'?8:7)*px,0,Math.PI*2); lctx.fillStyle=t==='rot'?SEL_COLOR:'#fff'; lctx.fill(); lctx.strokeStyle=SEL_COLOR; lctx.lineWidth=2.2*px; lctx.stroke();
+    if (t==='rot'){ lctx.beginPath(); lctx.arc(x,y,3.6*px,-2.4,1.2); lctx.strokeStyle='#fff'; lctx.lineWidth=1.6*px; lctx.stroke(); } } }
 function inSel(x,y){ if(!sel) return false; const pad=14/cssK(), [a,b,c,d]=sel.bb; return x>=a-pad&&x<=c+pad&&y>=b-pad&&y<=d+pad; }
 function positionSelBar(){
   const bar=$('#selbar'); if (!sel){ bar.hidden=true; return; }
   { const one=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)); $('#seltext').hidden=!(one && one.kind==='bubble'); }
+  { const one=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)); $('#selrot').hidden=!(one && one.tool==='shape' && (ROT_KINDS.has(one.kind)||one.kind==='free')); }
   { const hasImg=sel.p.strokes.some(s=>sel.ids.has(s.id)&&s.tool==='img'); $('#selopa').hidden=!hasImg; if (!hasImg) $('#oppanel').hidden=true; }
   $('#selstyle').hidden=!selShapes().length; $('#selback').hidden=!sel.p.strokes.some(s=>sel.ids.has(s.id)&&(s.tool==='img'||s.tool==='shape'));
   const r=sel.p.el.getBoundingClientRect(), k=cssK(), [x0,y0,x1,y1]=sel.bb;
   const top=$('#scroller').getBoundingClientRect().top + (st.dock==='top' ? 66 : 0);
-  let y=r.top+y0*k-56; if (y<top+8) y=r.top+y1*k+16;
+  const one1=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)), rotH=!!(one1 && one1.tool==='shape' && (ROT_KINDS.has(one1.kind)||one1.kind==='free'));   // 回転の取っ手にかぶらないよう、バーを高くする
+  let y=r.top+y0*k-56-(rotH?46:0); if (y<top+8) y=r.top+y1*k+16;
   bar.style.left=(r.left+(x0+x1)/2*k)+'px'; bar.style.top=y+'px'; bar.hidden=false;
 }
 function setSel(p, ids){ if(!ids.size){ clearSel(); return; } sel={p, ids, bb:selBB(p,ids)}; drawSel(); positionSelBar(); }
@@ -990,7 +1045,7 @@ pagesEl.addEventListener('pointerdown', e => {
     armHold(); drawCur();
   } else if (st.tool==='shape'){
     if (sel) clearSel();
-    attachLive(p); cur.mode='shape'; cur.a=[x,y]; cur.b=[x,y]; cur.moved=false;
+    attachLive(p); cur.mode='shape'; cur.a=[x,y]; cur.b=[x,y]; cur.moved=false; cur.path=[x,y];
   } else if (st.tool==='eraser'){
     if (sel) clearSel();
     attachLive(p);
@@ -1000,7 +1055,7 @@ pagesEl.addEventListener('pointerdown', e => {
   } else {
     let hd=-1, hs=null, wasB=false;
     if (sel && sel.p===p && sel.ids.size===1){ hs=p.strokes.find(q=>sel.ids.has(q.id)); if (hs && (hs.tool==='shape'||hs.tool==='img')){ const H=handlePts(hs), rr=24/cur.k;
-      for (let i=0;i<H.length;i++) if (Math.hypot(x-H[i][0],y-H[i][1])<=rr){ hd=i; break; } } }
+      let bd=rr; for (let i=0;i<H.length;i++){ const d=Math.hypot(x-H[i][0],y-H[i][1]); if (d<=bd){ bd=d; hd=i; } } } }
     if (hd>=0){ cur.mode='resize'; cur.s=hs; cur.hi=hd; cur.tmp=hs; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawCur(); }
     else if ((wasB=(()=>{ const hh=st.tool==='select' && topHit(p,x,y,10/cur.k); return !!(hh && hh.kind==='bubble' && sel && sel.p===p && sel.ids.size===1 && sel.ids.has(hh.id)); })()), selPick(p,x,y,cur.k) || (sel && sel.p===p && inSel(x,y))){
       cur.mode='move'; cur.start=[x,y]; cur.dx=0; cur.dy=0; cur.tp=p; cur.cx=e.clientX; cur.cy=e.clientY; cur.tapEdit=wasB; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawSel(); startAutoScroll(cur); }
@@ -1059,7 +1114,7 @@ function addPoint(ev){
   } else if (cur.mode==='move'){
     cur.cx=ev.clientX; cur.cy=ev.clientY; updateMove(cur);
   } else if (cur.mode==='shape'){
-    cur.b=[x,y]; if (Math.hypot(x-cur.a[0],y-cur.a[1])*cur.k>4) cur.moved=true;
+    cur.b=[x,y]; if (st.shape.kind==='free') cur.path.push(x,y); if (Math.hypot(x-cur.a[0],y-cur.a[1])*cur.k>4) cur.moved=true;
   } else if (cur.mode==='resize'){
     cur.tmp=resizeStroke(cur.s, cur.hi, x, y);
   }
@@ -1139,7 +1194,11 @@ function drawCur(){
     lctx.strokeStyle=SEL_COLOR; lctx.lineWidth=1.5*px; lctx.setLineDash([5*px,4*px]); lctx.stroke(); lctx.setLineDash([]);
   } else if (cur.mode==='move'){ if (cur.tp && cur.tp!==cur.p) drawCross(); else drawSel(cur.dx, cur.dy); }
   else if (cur.mode==='shape'){
-    clearLive(); if (!cur.moved) return; lctx.setTransform(ls,0,0,ls,0,0); drawStroke(lctx, makeShape(cur));
+    clearLive(); if (!cur.moved) return; lctx.setTransform(ls,0,0,ls,0,0);
+    if (st.shape.kind==='free'){ const P=cur.path; lctx.beginPath(); lctx.moveTo(P[0],P[1]); for (let i=2;i<P.length;i+=2) lctx.lineTo(P[i],P[i+1]);
+      if (st.shape.fill){ lctx.globalAlpha=st.shape.fa==null?1:st.shape.fa; lctx.fillStyle=st.shape.fill; lctx.fill(); lctx.globalAlpha=1; }
+      lctx.strokeStyle=st.shape.color||st.shape.fill||'#2457d6'; lctx.lineWidth=Math.max(1,st.shape.w); lctx.lineJoin='round'; lctx.lineCap='round'; lctx.stroke(); }
+    else drawStroke(lctx, makeShape(cur));
   } else if (cur.mode==='resize'){
     clearLive(); lctx.setTransform(ls,0,0,ls,0,0); drawStroke(lctx, cur.tmp); drawHandles(handlePts(cur.tmp));
   }
@@ -1178,8 +1237,9 @@ function finish(discard){
     if (ids.size) setSel(p, ids); else clearLive();
   } else if (c.mode==='shape'){
     clearLive(); if (discard || !c.moved) return;
-    const s=makeShape(c);
-    if (Math.hypot(s.pts[3]-s.pts[0], s.pts[4]-s.pts[1])*c.k<5) return;
+    const s= st.shape.kind==='free' ? makeFree(c) : makeShape(c);
+    if (!s) return;
+    if (s.kind!=='free' && Math.hypot(s.pts[3]-s.pts[0], s.pts[4]-s.pts[1])*c.k<5) return;
     const before=p.strokes.slice(); p.strokes=p.strokes.concat([s]); pushAction({t:'set', p, before, after:p.strokes.slice()});
     if (p.inkCanvas.width){ const ctx=p.inkCanvas.getContext('2d'), k=p.inkCanvas.width/p.w; ctx.setTransform(k,0,0,k,0,0); drawStroke(ctx,s); }
     if (s.kind==='bubble') openBubble(p, s.id);
@@ -1544,6 +1604,10 @@ $('#bubmic').onclick=()=>{
     rec=r; r.start(); $('#bubmic').setAttribute('aria-pressed','true');
   } catch(err){ rec=null; toast('音声入力を始められませんでした。キーボードのマイクボタンをお使いください', 5000); }
 };
+$('#selrot').onclick=()=>{ if (!sel || sel.ids.size!==1) return; const p=sel.p, id=[...sel.ids][0];
+  setStrokes(p, p.strokes.map(s=>{ if (s.id!==id) return s; if (s.kind==='free') return rotateFree(s, Math.PI/2);
+    const o=withPts(s,s.pts); let a=(s.rot||0)+Math.PI/2; if (a>Math.PI) a-=2*Math.PI; o.rot=Math.round(a*1000)/1000; return o; }));
+  sel.bb=selBB(p,sel.ids); redrawInk(p); drawSel(); positionSelBar(); };
 $('#seltext').onclick=()=>{ if (!sel || sel.ids.size!==1) return; openBubble(sel.p, [...sel.ids][0]); };
 /* 画像の透過 */
 let opBefore=null;
@@ -1757,7 +1821,7 @@ async function kvGet(k){ try{ const db=await idb(); return await new Promise((re
 async function kvDel(k){ try{ const db=await idb(); await new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
 let saveT;
 function serStroke(s){ const o={ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts };
-  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; if (s.text) o.text=s.text; if (s.a!=null) o.a=s.a; return o; }
+  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; if (s.text) o.text=s.text; if (s.a!=null) o.a=s.a; if (s.rot) o.rot=s.rot; return o; }
 function metaOf(doc){
   const act = doc===D;
   return { name:doc.name, hasBytes:doc.hasBytes, dirty:doc.dirty!==false, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
@@ -3749,7 +3813,7 @@ function buildGuide(){
    card(I('[data-tool=eraser]'),'消しゴム','なぞって消します。もう一度タップすると、大きさと「線ごと／部分消し」を切り替えられます。部分消しは、なぞった部分だけが消えて線が途中で切れます。図形の塗りの内側や、貼った画像は消えません。')+
    card(I('[data-tool=select]'),'選択（V）','図形・画像・線をタップして選び、そのままドラッグで移動します。四隅の丸で大きさを変えられます。何もないところをドラッグすると範囲選択です。選んだものは、別のページまでドラッグして移せます（画面の端まで動かすと自動でスクロール）。画像は「透過」で透け具合を変えられます。')+
    card(I('[data-tool=lasso]'),'なげなわ（L）','囲んだ範囲の書き込みをまとめて選び、移動・複製・削除できます。')+
-   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
+   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。図形を選ぶと上に出る丸い取っ手で回転でき（15°ごとに吸い付きます）、「90°回転」ボタンもあります。「自由図形」は、なぞった輪郭が角のある多角形になり、選ぶと出る角の丸をドラッグして形を整えられます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
    card(I('#imgbtn'),'画像を貼る','撮影した写真や画像をページに貼ります。貼る前にトリミング（切り取り）ができ、紙や図面は台形補正・影とりをして貼ることもできます。貼ったあとは選択ツールで移動・拡大縮小、上からペンで書き込めます。')+
    card(I('#undo'),'取り消し／やり直し','ツールバーの矢印ボタンで、1つずつ戻したり進めたりできます。')+
    card(I('#pencil'),'Pencilのみ','オンにすると指では書かず、指はスクロールとズーム専用になります。Pencilを検出すると自動でオンになります。')+
