@@ -837,7 +837,8 @@ function handlePts(s){
   return H;
 }
 function withPts(s, pts){ const o=Object.assign({}, s, { pts, done:true }); delete o.bb; delete o.paths; return o; }
-function snapAng(a){ const st15=Math.PI/12, sn=Math.round(a/st15)*st15; return Math.abs(a-sn)<0.07 ? sn : a; }
+let lastRotAng=0;
+function snapAng(a){ const q=Math.PI/2, sn=Math.round(a/q)*q; if (Math.abs(a-sn)<0.035) a=sn; lastRotAng=a; return a; }   // 自由に回せる。90°の位置の近くだけ軽く吸い付く
 function rotateFree(s, a){ const bb=bbOf(s), cx=(bb[0]+bb[2])/2, cy=(bb[1]+bb[3])/2, pts=[];
   for (let i=0;i<s.pts.length;i+=3){ const r=rotPt(s.pts[i],s.pts[i+1],cx,cy,a); pts.push(Math.round(r[0]*100)/100, Math.round(r[1]*100)/100, 0); }
   return withPts(s,pts); }
@@ -1200,7 +1201,11 @@ function drawCur(){
       lctx.strokeStyle=st.shape.color||st.shape.fill||'#2457d6'; lctx.lineWidth=Math.max(1,st.shape.w); lctx.lineJoin='round'; lctx.lineCap='round'; lctx.stroke(); }
     else drawStroke(lctx, makeShape(cur));
   } else if (cur.mode==='resize'){
-    clearLive(); lctx.setTransform(ls,0,0,ls,0,0); drawStroke(lctx, cur.tmp); drawHandles(handlePts(cur.tmp));
+    clearLive(); lctx.setTransform(ls,0,0,ls,0,0); drawStroke(lctx, cur.tmp); const HH=handlePts(cur.tmp); drawHandles(HH);
+    const rh=HH[cur.hi]; if (rh && rh[2]==='rot'){ let d=Math.round(lastRotAng*180/Math.PI); d=((d%360)+360)%360; const px=1/cssK(), t=d+'°';
+      lctx.font='600 '+(14*px)+'px sans-serif'; const tw=lctx.measureText(t).width+12*px;
+      lctx.fillStyle='rgba(28,28,30,.85)'; lctx.beginPath(); lctx.roundRect(rh[0]+14*px, rh[1]-11*px, tw, 22*px, 6*px); lctx.fill();
+      lctx.fillStyle='#fff'; lctx.textBaseline='middle'; lctx.fillText(t, rh[0]+20*px, rh[1]); }
   }
 }
 function finish(discard){
@@ -3813,7 +3818,7 @@ function buildGuide(){
    card(I('[data-tool=eraser]'),'消しゴム','なぞって消します。もう一度タップすると、大きさと「線ごと／部分消し」を切り替えられます。部分消しは、なぞった部分だけが消えて線が途中で切れます。図形の塗りの内側や、貼った画像は消えません。')+
    card(I('[data-tool=select]'),'選択（V）','図形・画像・線をタップして選び、そのままドラッグで移動します。四隅の丸で大きさを変えられます。何もないところをドラッグすると範囲選択です。選んだものは、別のページまでドラッグして移せます（画面の端まで動かすと自動でスクロール）。画像は「透過」で透け具合を変えられます。')+
    card(I('[data-tool=lasso]'),'なげなわ（L）','囲んだ範囲の書き込みをまとめて選び、移動・複製・削除できます。')+
-   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。図形を選ぶと上に出る丸い取っ手で回転でき（15°ごとに吸い付きます）、「90°回転」ボタンもあります。「自由図形」は、なぞった輪郭が角のある多角形になり、選ぶと出る角の丸をドラッグして形を整えられます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
+   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。図形を選ぶと上に出る丸い取っ手をペンでドラッグすると、好きな角度に回転できます（角度が表示されます）。ちょうど90°だけ回したいときは「90°回転」ボタンを使います。「自由図形」は、なぞった輪郭が角のある多角形になり、選ぶと出る角の丸をドラッグして形を整えられます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
    card(I('#imgbtn'),'画像を貼る','撮影した写真や画像をページに貼ります。貼る前にトリミング（切り取り）ができ、紙や図面は台形補正・影とりをして貼ることもできます。貼ったあとは選択ツールで移動・拡大縮小、上からペンで書き込めます。')+
    card(I('#undo'),'取り消し／やり直し','ツールバーの矢印ボタンで、1つずつ戻したり進めたりできます。')+
    card(I('#pencil'),'Pencilのみ','オンにすると指では書かず、指はスクロールとズーム専用になります。Pencilを検出すると自動でオンになります。')+
