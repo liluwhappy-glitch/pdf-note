@@ -976,12 +976,39 @@ function rdp(P, eps){          // 手書きの輪郭を、少ない頂点の多�
     if (md>eps && mi>0){ keep[mi]=1; stack.push([a,mi],[mi,b]); } }
   const o=[]; for (let i=0;i<n;i++) if (keep[i]) o.push(P[i*2],P[i*2+1]); return o;
 }
+function tidyPolygon(V, k){      // 手書きのゆれを直線に整える（近い点をまとめ、ほぼ一直線の点を消し、水平・垂直に近い辺はぴったりにする）
+  let pts=[]; for (let i=0;i<V.length;i+=2) pts.push([V[i],V[i+1]]);
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9; for (const p of pts){ x0=Math.min(x0,p[0]); y0=Math.min(y0,p[1]); x1=Math.max(x1,p[0]); y1=Math.max(y1,p[1]); }
+  const D=Math.hypot(x1-x0,y1-y0), shortE=Math.max(12/k, D*0.07);
+  const angDiff=(a,b,c)=>{ const u=Math.atan2(b[1]-a[1],b[0]-a[0]), v=Math.atan2(c[1]-b[1],c[0]-b[0]); let d=Math.abs(u-v); if (d>Math.PI) d=2*Math.PI-d; return d; };
+  for (let pass=0; pass<4 && pts.length>3; pass++){
+    let changed=false;
+    for (let i=0;i<pts.length && pts.length>3;i++){            // 近すぎる点は1つにまとめる
+      const a=pts[i], b=pts[(i+1)%pts.length];
+      if (Math.hypot(a[0]-b[0],a[1]-b[1])<shortE){ pts.splice(i,2,[(a[0]+b[0])/2,(a[1]+b[1])/2]); changed=true; i--; } }
+    for (let i=0;i<pts.length && pts.length>3;i++){            // ほぼ一直線になる点は消す（約22°以内）
+      const a=pts[(i+pts.length-1)%pts.length], b=pts[i], c=pts[(i+1)%pts.length];
+      if (angDiff(a,b,c)<0.39){ pts.splice(i,1); changed=true; i--; } }
+    if (!changed) break;
+  }
+  const n=pts.length;
+  for (let pass=0; pass<2; pass++) for (let i=0;i<n;i++){        // 水平・垂直に近い辺はぴったり水平・垂直に（約8°以内）
+    const a=pts[i], b=pts[(i+1)%n], dx=b[0]-a[0], dy=b[1]-a[1], len=Math.hypot(dx,dy); if (len<1e-6) continue;
+    if (Math.abs(dy)/len<0.14){ const m=(a[1]+b[1])/2; a[1]=m; b[1]=m; }
+    else if (Math.abs(dx)/len<0.14){ const m=(a[0]+b[0])/2; a[0]=m; b[0]=m; } }
+  const o=[]; for (const p of pts) o.push(p[0],p[1]); return o;
+}
 function makeFree(c){
-  const S=st.shape; let P=c.path.slice(), eps=4/c.k, V=rdp(P,eps);
-  while (V.length/2>40 && eps<200){ eps*=1.4; V=rdp(P,eps); }
-  if (V.length>=6 && Math.hypot(V[0]-V[V.length-2],V[1]-V[V.length-1])*c.k<10) V.length-=2;   // 終点が始点に近ければ閉じる
-  if (V.length<6) return null;
-  const pts=[]; for (let i=0;i<V.length;i+=2) pts.push(Math.round(V[i]*100)/100, Math.round(V[i+1]*100)/100, 0);
+  const S=st.shape, P=c.path.slice();
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9; for (let i=0;i<P.length;i+=2){ x0=Math.min(x0,P[i]); y0=Math.min(y0,P[i+1]); x1=Math.max(x1,P[i]); y1=Math.max(y1,P[i+1]); }
+  const D=Math.hypot(x1-x0,y1-y0);
+  let eps=Math.max(7/c.k, D*0.04), V=rdp(P,eps);                     // 線のゆれは大きさの約4%（最低7px）まで無視する
+  while (V.length/2>40 && eps<D){ eps*=1.4; V=rdp(P,eps); }
+  if (V.length>=6 && Math.hypot(V[0]-V[V.length-2],V[1]-V[V.length-1])<Math.max(16/c.k, D*0.1)) V.length-=2;   // 終点が始点に近ければ閉じる
+  let W=V.length>=8 ? tidyPolygon(V, c.k) : V;
+  if (W.length<6) W=V;
+  if (W.length<6) return null;
+  const pts=[]; for (let i=0;i<W.length;i+=2) pts.push(Math.round(W[i]*100)/100, Math.round(W[i+1]*100)/100, 0);
   return { id:uid(), tool:'shape', kind:'free', color:S.color, fill:S.fill, fa:S.fa, w:S.w, pts, done:true };
 }
 /* ---------- selection ---------- */
