@@ -78,6 +78,8 @@ button,label.btn{font:inherit;color:inherit}
 .bubdlg{place-items:start center;padding-top:max(12px,env(safe-area-inset-top))}
 .bubdlg .dlgbox{width:min(520px,100%);max-width:none}
 #bubtext{width:100%;box-sizing:border-box;min-height:104px;resize:vertical;font:inherit;font-size:17px;line-height:1.5;padding:10px 12px;border-radius:10px;border:1px solid var(--line,rgba(127,127,127,.4));background:var(--bg,#fff);color:var(--ink)}
+.tagrow{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+#tagnum{font:inherit;font-size:22px;font-weight:700;padding:8px 12px;border-radius:10px;border:1px solid var(--line,rgba(127,127,127,.4));background:var(--bg,#fff);color:var(--ink);width:7em;box-sizing:border-box}
 .bubhint{font-size:12px;color:var(--muted);line-height:1.55}
 #bubmic[aria-pressed="true"]{background:#d6322b;color:#fff}
 #oppanel{position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--ink);color:var(--bar);border-radius:10px;padding:6px 12px;box-shadow:var(--shadow);white-space:nowrap;font-size:13px}
@@ -330,7 +332,9 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
 </div>
 <div class="dlg bubdlg" id="bubdlg" hidden role="dialog" aria-modal="true" aria-label="吹き出しのコメント">
   <div class="dlgbox">
-    <b>吹き出しのコメント</b>
+    <b id="bubttl">吹き出しのコメント</b>
+    <label class="tagrow" id="tagrow" hidden><span>記号（数字・英字、4文字まで）</span><input id="tagnum" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" lang="en"></label>
+    <div class="tagrow" id="bublbl" hidden><span>文字（入れ替えできます）</span></div>
     <textarea id="bubtext" lang="ja" autocapitalize="off" placeholder="ここにコメントを入力"></textarea>
     <div class="bubhint">キーボードで入力できます。Apple Pencilでこの枠に直接書くと、iPadの「スクリブル」で文字に変換されます。マイクで音声入力もできます。</div>
     <div class="dlgbtns">
@@ -714,12 +718,12 @@ function drawTip(c, list){     // 先端（確定部分の終点〜ペン先）�
 }
 
 /* ---------- 図形・画像（ペンの線と同じ配列に入れるので、選択・移動・複製・取り消し・保存が共通で使える） ---------- */
-const SH_KINDS=[['rect','四角'],['rrect','角丸'],['ellipse','円・楕円'],['tri','三角'],['diamond','ひし形'],['cloud','雲'],['bubble','吹き出し'],['free','自由図形'],['line','直線'],['arrow','矢印']];
+const SH_KINDS=[['rect','四角'],['rrect','角丸'],['ellipse','円・楕円'],['tri','三角'],['diamond','ひし形'],['cloud','雲'],['bubble','吹き出し'],['tag','記号タグ'],['free','自由図形'],['line','直線'],['arrow','矢印']];
 const SH_ICON={ rect:'<rect x="4" y="6" width="16" height="12"/>', rrect:'<rect x="4" y="6" width="16" height="12" rx="4"/>', ellipse:'<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   tri:'<path d="M12 5l8 14H4z"/>', diamond:'<path d="M12 4l8 8-8 8-8-8z"/>', cloud:'<path d="M7 17a3.5 3.5 0 0 1-.6-6.9 5 5 0 0 1 9.5-1A4 4 0 0 1 17 17z"/>',
-  free:'<path d="M4 17l3-10 6 3 3-6 4 9-5 6z"/>', bubble:'<path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/>', line:'<path d="M5 19L19 5"/>', arrow:'<path d="M5 19L19 5M10 5h9v9"/>' };
+  tag:'<rect x="2.5" y="7" width="19" height="10" rx="5"/><circle cx="7.6" cy="12" r="2.7"/><path d="M12.5 12h6"/>', free:'<path d="M4 17l3-10 6 3 3-6 4 9-5 6z"/>', bubble:'<path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4 4v-4H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/>', line:'<path d="M5 19L19 5"/>', arrow:'<path d="M5 19L19 5M10 5h9v9"/>' };
 const SH_COLORS=PEN_COLORS;
-const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud','bubble','free']);
+const SH_CLOSED=new Set(['rect','rrect','ellipse','tri','diamond','cloud','bubble','tag','free']);
 const SH_W=[0.5, 14];
 st.shape={ kind:'rect', color:'#d6322b', fill:null, fa:1, w:1.8, square:false };
 try { const o=JSON.parse(localStorage.getItem('akanib-shape')||'null'); if (o) Object.assign(st.shape, o); } catch(e){}
@@ -749,6 +753,9 @@ function shapeGeom0(s){
     case 'ellipse': { const rx=w/2, ry=h/2, kx=KAP*rx, ky=KAP*ry;
       c.push(['M',cx+rx,cy],['C',cx+rx,cy+ky,cx+kx,cy+ry,cx,cy+ry],['C',cx-kx,cy+ry,cx-rx,cy+ky,cx-rx,cy],
         ['C',cx-rx,cy-ky,cx-kx,cy-ry,cx,cy-ry],['C',cx+kx,cy-ry,cx+rx,cy-ky,cx+rx,cy],['Z']); break; }
+    case 'tag': { const r=Math.min(w,h)/2, k=KAP*r;
+      c.push(['M',x0+r,y0],['L',x1-r,y0],['C',x1-r+k,y0,x1,y0+r-k,x1,y0+r],['L',x1,y1-r],['C',x1,y1-r+k,x1-r+k,y1,x1-r,y1],
+        ['L',x0+r,y1],['C',x0+r-k,y1,x0,y1-r+k,x0,y1-r],['L',x0,y0+r],['C',x0,y0+r-k,x0+r-k,y0,x0+r,y0],['Z']); break; }
     case 'bubble': { const r=Math.min(w,h)*0.18, T=q.length>=9?[q[6],q[7]]:[x0+w*0.22, y1+Math.max(14,Math.min(36,h*0.45))];
       const E=[[x0+r,y0,x1-r,y0],[x1,y0+r,x1,y1-r],[x1-r,y1,x0+r,y1],[x0,y1-r,x0,y0+r]], CP=[[x1,y0],[x1,y1],[x0,y1],[x0,y0]];
       let side=2; if (T[1]<y0) side=0; else if (T[1]>y1) side=2; else if (T[0]>x1) side=1; else if (T[0]<x0) side=3;
@@ -802,12 +809,24 @@ function drawBubbleText(ctx, s, dx=0, dy=0){      // 吹き出しの大きさに
   let y=y0+pad+Math.max(0,(H-th)/2)+lh/2; for (const l of s._ln){ ctx.fillText(l, x0+pad+dx, y+dy); y+=lh; }
   ctx.restore();
 }
+function lumOf(c){ const m=/^#?([0-9a-f]{6})$/i.exec(c||''); if (!m) return 0; const n=parseInt(m[1],16); return (0.299*(n>>16)+0.587*((n>>8)&255)+0.114*(n&255))/255; }
+function fitFont(text, maxW, maxH, weight){ let fs=maxH; mctx.font=weight+' '+fs+'px '+BUB_FONT; const w=mctx.measureText(text).width; if (w>maxW) fs=Math.max(5,fs*maxW/w); return fs; }
+function drawTagText(ctx, s, dx=0, dy=0){      // 記号タグ：左の丸（数字・英字）＋右の文字
+  const [x0,y0,x1,y1]=bubbleBox(s), h=y1-y0, w=x1-x0; if (h<4||w<4) return;
+  const base=s.fill||s.color||'#1c1c1e', dark=lumOf(base)<0.55, fg=dark?'#ffffff':'#1c1c1e', d=Math.min(h,w), cr=d/2*0.86, cx=x0+d/2+dx, cy=(y0+y1)/2+dy;
+  ctx.save(); ctx.fillStyle=fg; ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.fill();
+  ctx.textBaseline='middle'; ctx.textAlign='center';
+  if (s.text){ const fs=fitFont(s.text, cr*1.46, cr*1.1, 700); ctx.font='700 '+fs+'px '+BUB_FONT; ctx.fillStyle=base; ctx.fillText(s.text, cx, cy+fs*0.04); }
+  if (s.text2){ const l=x0+d+h*0.08, r=x1-h*0.32, fs=fitFont(s.text2, Math.max(4,r-l), h*0.5, 500); ctx.font='500 '+fs+'px '+BUB_FONT; ctx.fillStyle=fg; ctx.fillText(s.text2, (l+r)/2+dx, cy+fs*0.04); }
+  ctx.restore();
+}
 function drawShape(ctx, s, dx=0, dy=0){
   const P=shapePath(s,dx,dy); ctx.save();
   if (SH_CLOSED.has(s.kind) && s.fill){ ctx.globalAlpha=s.fa==null?1:s.fa; ctx.fillStyle=s.fill; ctx.fill(P); ctx.globalAlpha=1; }
   if (s.color && s.w>0){ ctx.strokeStyle=s.color; ctx.lineWidth=s.w; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.stroke(P); }
   ctx.restore();
   if (s.kind==='bubble' && s.text) drawBubbleText(ctx,s,dx,dy);
+  else if (s.kind==='tag') drawTagText(ctx,s,dx,dy);
 }
 function redrawAllInk(){ for (const p of D.pages) if (p.el && p.inkCanvas && p.inkCanvas.width) redrawInk(p); }
 function drawImg(ctx, s, dx=0, dy=0){
@@ -834,7 +853,7 @@ function shapeHit(s, x, y, r, interior){
   const m=r+s.w+30; if (x<bx0-m||x>bx1+m||y<by0-m||y>by1+m) return false;
   const polys=flattenGeom(shapeGeom(s)), tol=r+(s.color?s.w/2:0);
   for (const pl of polys) for (let i=1;i<pl.length;i++) if (segDist(x,y,pl[i-1][0],pl[i-1][1],pl[i][0],pl[i][1])<=tol) return true;
-  if (interior && SH_CLOSED.has(s.kind) && (s.fill || interior==='any' || s.kind==='bubble')){ const pl=polys[0].flat(); if (pip(x,y,pl)) return true; }
+  if (interior && SH_CLOSED.has(s.kind) && (s.fill || interior==='any' || s.kind==='bubble' || s.kind==='tag')){ const pl=polys[0].flat(); if (pip(x,y,pl)) return true; }
   return false;
 }
 function topHit(p, x, y, r){
@@ -896,7 +915,9 @@ function makeShape(c){
     pts=[Math.min(ax,bx),Math.min(ay,by),0,Math.max(ax,bx),Math.max(ay,by),0];
   }
   if (S.kind==='bubble'){ const h=pts[4]-pts[1], w=pts[3]-pts[0]; pts.push(pts[0]+w*0.22, pts[4]+Math.max(14,Math.min(36,h*0.45)), 0); }
-  return { id:uid(), tool:'shape', kind:S.kind, color:S.color, fill:SH_CLOSED.has(S.kind)?(S.kind==='bubble'?(S.fill||'#ffffff'):S.fill):null, fa:S.fa, w:S.w, pts:pts.map(v=>Math.round(v*100)/100), done:true };
+  const o0={ id:uid(), tool:'shape', kind:S.kind, color:S.kind==='tag'?(S.fill||'#1c1c1e'):S.color, fill:SH_CLOSED.has(S.kind)?(S.kind==='bubble'?(S.fill||'#ffffff'):S.kind==='tag'?(S.fill||'#1c1c1e'):S.fill):null, fa:S.fa, w:S.w, pts:pts.map(v=>Math.round(v*100)/100), done:true };
+  if (S.kind==='tag'){ o0.text='1'; o0.text2='ラベル'; }
+  return o0;
 }
 /* 図形の設定パネル（描く前の設定／選んだ図形の色変更の両方で使う） */
 function selShapes(){ return sel ? sel.p.strokes.filter(s=>sel.ids.has(s.id) && s.tool==='shape') : []; }
@@ -994,7 +1015,7 @@ function drawHandles(hs){ const px=1/cssK(); lctx.setLineDash([]);
 function inSel(x,y){ if(!sel) return false; const pad=14/cssK(), [a,b,c,d]=sel.bb; return x>=a-pad&&x<=c+pad&&y>=b-pad&&y<=d+pad; }
 function positionSelBar(){
   const bar=$('#selbar'); if (!sel){ bar.hidden=true; return; }
-  { const one=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)); $('#seltext').hidden=!(one && one.kind==='bubble'); }
+  { const one=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)); $('#seltext').hidden=!(one && (one.kind==='bubble'||one.kind==='tag')); if (one) $('#seltext').textContent= one.kind==='tag' ? '文字' : 'コメント'; }
   { const one=sel.ids.size===1 && sel.p.strokes.find(s=>sel.ids.has(s.id)); $('#selrot').hidden=!(one && one.tool==='shape' && (ROT_KINDS.has(one.kind)||one.kind==='free')); }
   { const hasImg=sel.p.strokes.some(s=>sel.ids.has(s.id)&&s.tool==='img'); $('#selopa').hidden=!hasImg; if (!hasImg) $('#oppanel').hidden=true; }
   $('#selstyle').hidden=!selShapes().length; $('#selback').hidden=!sel.p.strokes.some(s=>sel.ids.has(s.id)&&(s.tool==='img'||s.tool==='shape'));
@@ -1075,7 +1096,7 @@ pagesEl.addEventListener('pointerdown', e => {
     if (sel && sel.p===p && sel.ids.size===1){ hs=p.strokes.find(q=>sel.ids.has(q.id)); if (hs && (hs.tool==='shape'||hs.tool==='img')){ const H=handlePts(hs), rr=24/cur.k;
       let bd=rr; for (let i=0;i<H.length;i++){ const d=Math.hypot(x-H[i][0],y-H[i][1]); if (d<=bd){ bd=d; hd=i; } } } }
     if (hd>=0){ cur.mode='resize'; cur.s=hs; cur.hi=hd; cur.tmp=hs; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawCur(); }
-    else if ((wasB=(()=>{ const hh=st.tool==='select' && topHit(p,x,y,10/cur.k); return !!(hh && hh.kind==='bubble' && sel && sel.p===p && sel.ids.size===1 && sel.ids.has(hh.id)); })()), selPick(p,x,y,cur.k) || (sel && sel.p===p && inSel(x,y))){
+    else if ((wasB=(()=>{ const hh=st.tool==='select' && topHit(p,x,y,10/cur.k); return !!(hh && (hh.kind==='bubble'||hh.kind==='tag') && sel && sel.p===p && sel.ids.size===1 && sel.ids.has(hh.id)); })()), selPick(p,x,y,cur.k) || (sel && sel.p===p && inSel(x,y))){
       cur.mode='move'; cur.start=[x,y]; cur.dx=0; cur.dy=0; cur.tp=p; cur.cx=e.clientX; cur.cy=e.clientY; cur.tapEdit=wasB; $('#selbar').hidden=true; redrawInk(p, sel.ids); drawSel(); startAutoScroll(cur); }
     else { clearSel(); attachLive(p); cur.mode='lasso'; cur.poly=[x,y]; cur.marq=(st.tool==='select'); cur.a0=[x,y]; drawCur(); }
   }
@@ -1264,7 +1285,7 @@ function finish(discard){
     if (s.kind!=='free' && Math.hypot(s.pts[3]-s.pts[0], s.pts[4]-s.pts[1])*c.k<5) return;
     const before=p.strokes.slice(); p.strokes=p.strokes.concat([s]); pushAction({t:'set', p, before, after:p.strokes.slice()});
     if (p.inkCanvas.width){ const ctx=p.inkCanvas.getContext('2d'), k=p.inkCanvas.width/p.w; ctx.setTransform(k,0,0,k,0,0); drawStroke(ctx,s); }
-    if (s.kind==='bubble') openBubble(p, s.id);
+    if (s.kind==='bubble' || s.kind==='tag') openBubble(p, s.id);
   } else if (c.mode==='resize'){
     if (discard || c.tmp===c.s){ redrawInk(p); drawSel(); positionSelBar(); return; }
     setStrokes(p, p.strokes.map(q=>q.id===c.s.id ? c.tmp : q)); sel.bb=selBB(p, sel.ids);
@@ -1600,13 +1621,20 @@ $('#selback').onclick=()=>{ if(!sel) return; const p=sel.p, ids=sel.ids; setStro
 let bub=null, rec=null;
 const bubTa=$('#bubtext');
 function openBubble(p, id){
-  const s=p.strokes.find(q=>q.id===id); if (!s) return;
-  bub={p,id}; bubTa.value=s.text||''; $('#bubdlg').hidden=false; closePop();
-  setTimeout(()=>{ try{ bubTa.focus(); bubTa.setSelectionRange(bubTa.value.length, bubTa.value.length); }catch(e){} }, 60);
+  const s=p.strokes.find(q=>q.id===id); if (!s) return; const tag=s.kind==='tag';
+  bub={p,id,tag}; $('#bubttl').textContent=tag?'記号タグの文字':'吹き出しのコメント';
+  $('#tagrow').hidden=!tag; $('#bublbl').hidden=!tag; bubTa.style.minHeight=tag?'64px':''; bubTa.placeholder=tag?'ここに文字を入力（例：階段）':'ここにコメントを入力';
+  if (tag){ $('#tagnum').value=s.text||''; bubTa.value=s.text2||''; } else bubTa.value=s.text||'';
+  $('#bubdlg').hidden=false; closePop();
+  setTimeout(()=>{ try{ const el=tag?$('#tagnum'):bubTa; el.focus(); el.setSelectionRange(el.value.length, el.value.length); }catch(e){} }, 60);
 }
 function bubStopRec(){ if (rec){ try{ rec.stop(); }catch(e){} rec=null; } $('#bubmic').setAttribute('aria-pressed','false'); }
 function bubClose(save){
   bubStopRec(); const b=bub; bub=null; $('#bubdlg').hidden=true; if (!b) return;
+  if (save && b.tag){ const text=$('#tagnum').value.trim().slice(0,4), text2=bubTa.value.replace(/\s*\n\s*/g,' ').trim();
+    const c0=b.p.strokes.find(q=>q.id===b.id);
+    if (c0 && ((c0.text||'')!==text || (c0.text2||'')!==text2)){ setStrokes(b.p, b.p.strokes.map(q=>q.id===b.id ? Object.assign(withPts(q,q.pts),{text,text2}) : q)); redrawInk(b.p); if (sel && sel.p===b.p) drawSel(); }
+    return; }
   if (save){ const text=bubTa.value.replace(/\s+$/,'');
     const cur0=b.p.strokes.find(q=>q.id===b.id);
     if (cur0 && (cur0.text||'')!==text){ setStrokes(b.p, b.p.strokes.map(q=>q.id===b.id ? Object.assign(withPts(q,q.pts),{text}) : q)); redrawInk(b.p); if (sel && sel.p===b.p) drawSel(); } }
@@ -1851,7 +1879,7 @@ async function kvGet(k){ try{ const db=await idb(); return await new Promise((re
 async function kvDel(k){ try{ const db=await idb(); await new Promise((res,rej)=>{ const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
 let saveT;
 function serStroke(s){ const o={ id:s.id, tool:s.tool, color:s.color, w:s.w, pts:s.pts };
-  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; if (s.text) o.text=s.text; if (s.a!=null) o.a=s.a; if (s.rot) o.rot=s.rot; return o; }
+  if (s.tool==='shape'){ o.kind=s.kind; o.fill=s.fill; o.fa=s.fa; } else if (s.tool==='img') o.src=s.src; if (s.cap) o.cap=s.cap; if (s.text) o.text=s.text; if (s.text2) o.text2=s.text2; if (s.a!=null) o.a=s.a; if (s.rot) o.rot=s.rot; return o; }
 function metaOf(doc){
   const act = doc===D;
   return { name:doc.name, hasBytes:doc.hasBytes, dirty:doc.dirty!==false, zoom: act ? st.zoom : doc.zoom, scroll: act ? [scroller.scrollLeft, scroller.scrollTop] : doc.scroll,
@@ -1931,9 +1959,9 @@ async function exportPdf(){
           if (SH_CLOSED.has(s.kind) && s.fill){ o.color=hexRgb(s.fill); o.opacity=s.fa==null?1:s.fa; any=true; }
           if (s.color && s.w>0){ o.borderColor=hexRgb(s.color); o.borderWidth=s.w; o.borderLineCap=LineCapStyle.Round; any=true; }
           if (any) page.drawSvgPath(d,o);
-          if (s.kind==='bubble' && s.text){
+          if ((s.kind==='bubble' && s.text) || s.kind==='tag'){
             try { const [bx0,by0,bx1,by1]=bubbleBox(s), sc=3, cv=document.createElement('canvas'); cv.width=Math.max(1,Math.ceil((bx1-bx0)*sc)); cv.height=Math.max(1,Math.ceil((by1-by0)*sc));
-              const cx2=cv.getContext('2d'); cx2.setTransform(sc,0,0,sc,0,0); drawBubbleText(cx2,s,-bx0,-by0);
+              const cx2=cv.getContext('2d'); cx2.setTransform(sc,0,0,sc,0,0); (s.kind==='tag'?drawTagText:drawBubbleText)(cx2,s,-bx0,-by0);
               const bin=atob(cv.toDataURL('image/png').split(',')[1]), u=new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
               const em=await out.embedPng(u), q=toPdf(p,bx0,by1); page.drawImage(em,{ x:q[0], y:-q[1], width:bx1-bx0, height:by1-by0 }); cv.width=cv.height=0;
             } catch(e){ console.error(e); } }
@@ -3844,7 +3872,7 @@ function buildGuide(){
    card(I('[data-tool=eraser]'),'消しゴム','なぞって消します。もう一度タップすると、大きさと「線ごと／部分消し」を切り替えられます。部分消しは、なぞった部分だけが消えて線が途中で切れます。図形の塗りの内側や、貼った画像は消えません。')+
    card(I('[data-tool=select]'),'選択（V）','図形・画像・線をタップして選び、そのままドラッグで移動します。四隅の丸で大きさを変えられます。何もないところをドラッグすると範囲選択です。選んだものは、別のページまでドラッグして移せます（画面の端まで動かすと自動でスクロール）。画像は「透過」で透け具合を変えられます。')+
    card(I('[data-tool=lasso]'),'なげなわ（L）','囲んだ範囲の書き込みをまとめて選び、移動・複製・削除できます。')+
-   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。図形を選ぶと上に出る丸い取っ手をペンでドラッグすると、好きな角度に回転できます（角度が表示されます）。ちょうど90°だけ回したいときは「90°回転」ボタンを使います。「自由図形」は、なぞった輪郭が角のある多角形になり、選ぶと出る角の丸をドラッグして形を整えられます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
+   card(I('[data-tool=shape]'),'図形（S）','四角・角丸・円・三角・ひし形・雲・吹き出し・直線・矢印を描きます。吹き出しは、描いた直後にコメントを入力できます（キーボード、Apple Pencilで直接書く、音声）。しっぽの丸をドラッグすると向きを変えられ、選んで「コメント」で書き直せます。「記号タグ」は、左の丸（数字・英字）と右の文字（階段など）を、描いた直後や選んで「文字」から入れ替えられます。図形を選ぶと上に出る丸い取っ手をペンでドラッグすると、好きな角度に回転できます（角度が表示されます）。ちょうど90°だけ回したいときは「90°回転」ボタンを使います。「自由図形」は、なぞった輪郭が角のある多角形になり、選ぶと出る角の丸をドラッグして形を整えられます。もう一度タップで、線の色・塗りつぶし・濃さ・太さを選べます。描いたあとは「選択」で移動、選んで「図形の色」で色を後から変更できます。')+
    card(I('#imgbtn'),'画像を貼る','撮影した写真や画像をページに貼ります。貼る前にトリミング（切り取り）ができ、紙や図面は台形補正・影とりをして貼ることもできます。貼ったあとは選択ツールで移動・拡大縮小、上からペンで書き込めます。')+
    card(I('#undo'),'取り消し／やり直し','ツールバーの矢印ボタンで、1つずつ戻したり進めたりできます。')+
    card(I('#pencil'),'Pencilのみ','オンにすると指では書かず、指はスクロールとズーム専用になります。Pencilを検出すると自動でオンになります。')+
