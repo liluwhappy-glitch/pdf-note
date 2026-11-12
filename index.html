@@ -24,7 +24,7 @@
   --desk:#e3e6eb; --bar:#fbfbfc; --line:#d5d9e0; --ink:#1b2230; --muted:#636c7d;
   --accent:#2457d6; --accent-soft:#e2e9fb; --hover:#eef0f4; --paper:#ffffff;
   --shadow:0 1px 2px rgba(18,28,48,.14),0 8px 24px rgba(18,28,48,.08);
-  --ft-pdf:#cf463c; --ft-word:#2b5fc4; --ft-excel:#1b7d45; --ft-ppt:#c25d22; --ft-note:#6b7484; --danger:#c42b1c;
+  --ft-pdf:#cf463c; --ft-word:#2b5fc4; --ft-excel:#1b7d45; --ft-ppt:#c25d22; --ft-note:#6b7484; --ft-img:#8a55c7; --danger:#c42b1c;
   --f-ui:"IBM Plex Sans JP","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
   --f-num:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 }
@@ -243,7 +243,7 @@ body[data-dock="left"] .help{left:calc(max(16px,env(safe-area-inset-left,0px)) +
     <label class="btn" for="file" title="PDF・Word・Excel・PowerPointを開く">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8A1.5 1.5 0 0 1 20 9.5V17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17z"/></svg><span>開く</span>
     </label>
-    <input id="file" class="vh" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.presentationml.presentation">
+    <input id="file" class="vh" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/heic,image/heif,.png,.jpg,.jpeg,.webp,.gif,.bmp,.heic,.heif,.pdf,.docx,.xlsx,.xlsm,.xls,.csv,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.presentationml.presentation">
     <button class="btn" id="newnote" title="新しいノートを作成（方眼あり／なし）">新規</button>
   </div>
   <span class="docname" id="docname">読み込み中…</span>
@@ -1841,7 +1841,7 @@ $('#dlgexport').onclick=async()=>{
   if (r==='shared' || r==='downloaded') closeTab(d, true);
   else if (r!=='cancel') toast('書き出せなかったため、タブは閉じていません', 4000);
 };
-const FT = { pdf:['PDF','--ft-pdf'], docx:['DOC','--ft-word'], xlsx:['XLS','--ft-excel'], xlsm:['XLS','--ft-excel'], xls:['XLS','--ft-excel'], csv:['CSV','--ft-excel'], pptx:['PPT','--ft-ppt'] };
+const FT = { png:['IMG','--ft-img'], jpg:['IMG','--ft-img'], jpeg:['IMG','--ft-img'], webp:['IMG','--ft-img'], gif:['IMG','--ft-img'], bmp:['IMG','--ft-img'], heic:['IMG','--ft-img'], heif:['IMG','--ft-img'], pdf:['PDF','--ft-pdf'], docx:['DOC','--ft-word'], xlsx:['XLS','--ft-excel'], xlsm:['XLS','--ft-excel'], xls:['XLS','--ft-excel'], csv:['CSV','--ft-excel'], pptx:['PPT','--ft-ppt'] };
 function renderTabs(){
   const bar=$('#tabs'); bar.replaceChildren();
   for (const d of docs){
@@ -1866,9 +1866,40 @@ function renderTabs(){
   hb.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.6 2.6 0 1 1 3.7 2.4c-.8.4-1.2.9-1.2 1.8"/><circle cx="12" cy="16.8" r=".6" fill="currentColor"/></svg><span>使い方</span>';
   hb.onclick=()=>showGuide(); bar.append(hb);
 }
+const IMG_EXT=new Set(['png','jpg','jpeg','webp','gif','bmp','heic','heif']);
+const isImgFile=f=>/^image\//.test(f.type) || IMG_EXT.has((f.name.split('.').pop()||'').toLowerCase());
+/* 画像（PNG・JPEGなど）を、1枚＝1ページのPDFにして開く。透明なPNGは白地の上に重なる */
+async function importImages(files){
+  toast('画像を読み込んでいます…', 60000);
+  const out=await PDFLib.PDFDocument.create(); let n=0;
+  for (const f of files){
+    let bm; try { bm=await createImageBitmap(f, { imageOrientation:'from-image' }); }
+    catch(e){ bm=await new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error(`「${f.name}」を画像として読み込めませんでした（この端末で表示できない形式かもしれません）`)); im.src=URL.createObjectURL(f); }); }
+    const w0=bm.width||bm.naturalWidth, h0=bm.height||bm.naturalHeight, k=Math.min(1, 3200/Math.max(w0,h0));
+    const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(w0*k)); cv.height=Math.max(1,Math.round(h0*k));
+    const png = f.type==='image/png' || /\.png$/i.test(f.name), cx=cv.getContext('2d');
+    if (!png){ cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height); }
+    cx.drawImage(bm,0,0,cv.width,cv.height); if (bm.close) try{ bm.close(); }catch(_){}
+    const blob=await new Promise(r=>cv.toBlob(r, png?'image/png':'image/jpeg', 0.92));
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    const img= png ? await out.embedPng(bytes) : await out.embedJpg(bytes);
+    const land=cv.width>=cv.height, bw=land?841.89:595.28, bh=land?595.28:841.89, sc=Math.min(bw/cv.width, bh/cv.height);
+    const pg=out.addPage([cv.width*sc, cv.height*sc]); pg.drawImage(img,{ x:0, y:0, width:cv.width*sc, height:cv.height*sc });
+    cv.width=cv.height=0; n++;
+  }
+  if (!n) throw new Error('画像がありません');
+  const name= files[0].name;
+  await openDoc(await out.save(), name);
+  toast(`画像${n}枚を${n}ページにして新しいタブで開きました`);
+}
 $('#file').addEventListener('change', async e=>{
-  const f=e.target.files && e.target.files[0]; e.target.value='';
-  if (!f) return;
+  const all=[...(e.target.files||[])]; e.target.value='';
+  const f=all[0]; if (!f) return;
+  if (isImgFile(f)){
+    try { await importImages(all.filter(isImgFile)); }
+    catch(err){ console.error(err); toast(err && err.message ? err.message : '画像を開けませんでした', 6000); }
+    return;
+  }
   const ext=(f.name.split('.').pop()||'').toLowerCase();
   if (ext==='doc' || ext==='ppt'){ toast('古い形式（.doc / .ppt）は開けません。Word・PowerPointで .docx / .pptx として保存し直してください', 6000); return; }
   if (OFFICE_EXT[ext]){
